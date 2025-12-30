@@ -3,7 +3,6 @@
 
 <application
     android:label="Gym App"
-    android:icon="@mipmap/ic_launcher"
     android:theme="@style/Theme.GymApp"
     android:allowBackup="true">
 
