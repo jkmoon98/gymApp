@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>12-Week Gym Tracker</title>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- SheetJS for Excel import/export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+</head>
+
+<body class="bg-gray-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useRef, useState, useMemo, useCallback } = React;
+
+    // --- Ensure SheetJS is loaded before export ---
+    // --- Simple download helper (for CSV fallback) ---
+const downloadTextFile = (filename, text, mime = "text/plain") => {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
+const toCSV = (rows) => {
+  const esc = (v) => {
+    const s = String(v ?? "");
+    if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  if (!rows || rows.length === 0) return "";
+  const headers = Object.keys(rows[0]);
+  const lines = [headers.map(esc).join(",")];
+  for (const r of rows) lines.push(headers.map((h) => esc(r[h])).join(","));
+  return lines.join("\n");
+};
+
+// --- Ensure SheetJS is loaded before export ---
+const ensureXLSX = () =>
+  new Promise((resolve, reject) => {
+    if (window.XLSX) return resolve(window.XLSX);
+
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js";
+    s.onload = () => (window.XLSX ? resolve(window.XLSX) : reject(new Error("XLSX failed to load")));
+    s.onerror = () => reject(new Error("Could not load XLSX (blocked/offline?)"));
+    document.head.appendChild(s);
+  });
+
+
+// ----- Prefilled program + exercise catalog (from your uploaded Excel) -----
+    const PREFILLED_PROGRAM = {"1": {"Monday": [{"id": "b0d78285-b9d2-47b4-a3c2-c4fa1f8c3d4b", "name": "45° Incline Barbell Press", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["45° Incline DB Press", "45° Incline Machine Press"]}, {"id": "c240ecfb-5e28-4b8e-a6c0-70ac269facd7", "name": "Cable Crossover Ladder", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Pec Deck", "Bottom-Half DB Flye"]}, {"id": "e754a20d-a391-4528-997c-f6c9c178b5aa", "name": "Wide-Grip Pull-Up", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Wide-Grip Lat Pulldown", "Dual-Handle Lat Pulldown"]}, {"id": "30b5a5e2-ea36-42e2-851d-0b6bbfe1b851", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "b7177a84-2d32-4e65-8c6f-690cab350e93", "name": "Pendlay Deficit Row", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Smith Machine Row", "Single-Arm DB Row"]}, {"id": "2b4694ff-9813-4146-b64a-574e04a478a7", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "3797e684-5cd5-4c17-a04e-c5701ca50f84", "name": "Bayesian Cable Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "eedb53fe-59db-4da4-908f-6d71a2227e72", "name": "Lying Leg Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "d00fa7de-afd3-461a-a531-f1668095a103", "name": "Smith Machine Squat", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "6f84609c-3905-404f-b4c2-437ea7701492", "name": "Barbell RDL", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["DB RDL", "Snatch-Grip RDL"]}, {"id": "4c1f5d55-5c4b-4254-b0df-dd099def58c8", "name": "Leg Extension", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "4276aa4b-16bb-4c01-8269-a18b48e6736a", "name": "Standing Calf Raise", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}, {"id": "26cde343-079c-43d1-9cd8-993e81214b67", "name": "Cable Crunch", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Machine Crunch"]}], "Wednesday": [{"id": "c941be65-305d-4dd3-935d-3d8c9dd46144", "name": "Neutral-Grip Lat Pulldown", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Neutral-Grip Pull-Up", "Dual-Handle Lat Pulldown"]}, {"id": "0b750e5c-027f-41d5-9806-065c0d7bd349", "name": "Chest-Supported Machine Row", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Chest-Supported T-Bar Row", "Incline Chest-Supported DB Row"]}, {"id": "f6bc2111-5799-4702-9995-3fbf7485a28f", "name": "Neutral-Grip Seated Cable Row", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Helms Row", "Meadows Row"]}, {"id": "94272d5c-0491-46c5-9871-8796ff88866e", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "a63017e1-7f20-4f9d-ac7b-a621256849da", "name": "Machine Shrug", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Paused Shrug-In", "DB Shrug"]}, {"id": "d00789e8-9fb7-47f6-97dd-b5ffbbcff258", "name": "EZ-Bar Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["EZ-Bar Curl", "DB Curl"]}, {"id": "00b14129-d243-4e56-8d44-af77a595fa60", "name": "Machine Preacher Curl", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["EZ-Bar Preacher Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "c43a7fec-f36e-4d1d-b40e-4eb1d8bfffc4", "name": "Barbell Bench Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Machine Chest Press", "DB Bench Press"]}, {"id": "46d94c8b-80c3-4bdd-b644-aa78df0c56e8", "name": "Machine Shoulder Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Cable Shoulder Press", "Seated DB Shoulder Press"]}, {"id": "9cca1711-1c07-47cd-b5a5-673ab31ba3d3", "name": "Bottom-Half DB Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Bottom-Half Seated Cable Flye", "Low-to-High Cable Crossover"]}, {"id": "3e78e7b3-02ab-4fbe-9519-93b69be22f38", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "8c1a731a-059f-4066-9e3f-733187d0a9f3", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "0dbc183e-b132-467d-a04b-8c086418f7bf", "name": "Cable Triceps Kickback", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["DB Triceps Kickback", "Bench Dip"]}, {"id": "32d3b495-3655-48d2-8147-c8b7b1e5f655", "name": "Roman Chair Leg Raise", "sets": "2", "reps": "10-20", "defaultWorking": 2, "alternatives": ["Hanging Leg Raise", "Modified Candlestick"]}], "Friday": [{"id": "c407df01-a812-4d87-a907-f4bbea767130", "name": "Leg Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Walking Lunge"]}, {"id": "c4ec92b9-fcef-48a3-acd0-b24673d6aff5", "name": "Seated Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "df547eaf-ffd0-49b9-bf8c-907e7d3dbc90", "name": "DB Bulgarian Split Squat", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["DB Step-Up", "Goblet Squat"]}, {"id": "744663ff-4f60-432f-945c-bd2821913d25", "name": "Leg Extension", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "ce9b58f7-2e4b-40d7-9f80-632489768501", "name": "Machine Hip Adduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "8ff2bc57-67b3-4163-afeb-42ac7500d82c", "name": "Machine Hip Abduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "0c479bd5-219c-427b-9238-c54eef4a1015", "name": "Standing Calf Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "2": {"Monday": [{"id": "5755ab2c-0dc4-4ef2-b26f-ca4746679b86", "name": "45° Incline Barbell Press", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["45° Incline DB Press", "45° Incline Machine Press"]}, {"id": "7ede0880-4bf1-49df-8b43-d00acf0f2879", "name": "Cable Crossover Ladder", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Pec Deck", "Bottom-Half DB Flye"]}, {"id": "51659532-b63b-47a8-98f2-50920d94e913", "name": "Wide-Grip Pull-Up", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Dual-Handle Lat Pulldown"]}, {"id": "9b92af54-f283-4492-88c1-e1e9a33a8491", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "88f98487-145f-4040-a054-103a4fef1b90", "name": "Pendlay Deficit Row", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Smith Machine Row", "Single-Arm DB Row"]}, {"id": "52ec9608-b640-41c6-aefc-8dace601afd3", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "edaa54ea-3775-4060-a431-6ee09b655ca0", "name": "Bayesian Cable Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "3ae21b15-87f0-47b1-bf7f-59998cbc13e2", "name": "Lying Leg Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "3efa4174-641c-45ca-b4b1-8c329b4c33fd", "name": "Smith Machine Squat", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "25043150-5ac3-4dfd-94ee-dfb7a9ee97f4", "name": "Barbell RDL", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB RDL", "Snatch-Grip RDL"]}, {"id": "a52a7011-2ca1-4b0c-83dd-015cbbaebd00", "name": "Leg Extension", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "21ee4548-a345-404f-94ff-1c6e8588114d", "name": "Standing Calf Raise", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}, {"id": "3476d884-9ed8-491b-85a0-adc840c76240", "name": "Cable Crunch", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Machine Crunch"]}], "Wednesday": [{"id": "1b712665-59bf-452b-9f05-3af80dfe2ca5", "name": "Neutral-Grip Lat Pulldown", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Neutral-Grip Pull-Up", "Dual-Handle Lat Pulldown"]}, {"id": "5e06f7c7-1214-4623-aff8-47e13d314e98", "name": "Chest-Supported Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Chest-Supported T-Bar Row", "Incline Chest-Supported DB Row"]}, {"id": "85ca0ccb-0060-45f6-9a1e-c73b83b297ca", "name": "Neutral-Grip Seated Cable Row", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Helms Row", "Meadows Row"]}, {"id": "b1ff8d1d-3703-442e-837f-3874d95bce10", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "e4a6c65c-f485-4b1a-8c9b-4b713d4b91b7", "name": "Machine Shrug", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Paused Shrug-In", "DB Shrug"]}, {"id": "83894cd4-600e-48dc-807a-85dc09fa1c73", "name": "EZ-Bar Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["EZ-Bar Curl", "DB Curl"]}, {"id": "c1064beb-e50c-4311-a550-6786f29069c8", "name": "Machine Preacher Curl", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["EZ-Bar Preacher Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "8301d2e0-622e-4698-bee1-2edcf2887ed6", "name": "Barbell Bench Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Machine Chest Press", "DB Bench Press"]}, {"id": "f2c6aea1-2c23-499f-9f37-f02e17754d09", "name": "Machine Shoulder Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Cable Shoulder Press", "Seated DB Shoulder Press"]}, {"id": "8dec1a89-6e33-4096-8c81-5af5dbf0b00f", "name": "Bottom-Half DB Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Bottom-Half Seated Cable Flye", "Low-to-High Cable Crossover"]}, {"id": "8154a877-7ae6-45b8-a45f-40f4ad587a29", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "632d2274-b39d-4883-82f5-cc23932b006c", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "b846cd21-9538-40b5-b04e-9b9e137bab0c", "name": "Cable Triceps Kickback", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["DB Triceps Kickback", "Bench Dip"]}, {"id": "1327e815-f988-4c14-ab5b-059211e83340", "name": "Roman Chair Leg Raise", "sets": "2", "reps": "10-20", "defaultWorking": 2, "alternatives": ["Hanging Leg Raise", "Modified Candlestick"]}], "Friday": [{"id": "39c49a62-2a69-417e-a7ce-96b3a6031e9d", "name": "Leg Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Smith Machine Static Lunge", "DB Walking Lunge"]}, {"id": "04c67476-0f1d-4d20-a5f8-88a7a4d1d009", "name": "Seated Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "8d96be58-5303-4dc9-83b2-ddf55c9fae2c", "name": "DB Bulgarian Split Squat", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["DB Step-Up", "Goblet Squat"]}, {"id": "e3ec9608-799e-4f48-82b0-002953b067ba", "name": "Leg Extension", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "5bf2f564-10ac-4fc4-9d55-54e59f31ebc8", "name": "Machine Hip Adduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "3a4e8557-befa-47c4-9db4-03b28b3b8083", "name": "Machine Hip Abduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "810d6191-77d1-48a8-9ff3-f0de4f0e9b88", "name": "Standing Calf Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "3": {"Monday": [{"id": "c97c0de1-4468-49c1-a44d-675b748620e4", "name": "45° Incline Barbell Press", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["45° Incline DB Press", "45° Incline Machine Press"]}, {"id": "c2ddbdda-caa6-4d6f-8dc6-31d3c2d2697f", "name": "Cable Crossover Ladder", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Pec Deck", "Bottom-Half DB Flye"]}, {"id": "0fb1df72-407b-41fd-b87c-de76099579e6", "name": "Wide-Grip Pull-Up", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Dual-Handle Lat Pulldown"]}, {"id": "66fc7e75-1eee-44df-9f80-a9261da6730b", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "43afda05-afba-4ee1-ac91-4e2d88d25f80", "name": "Pendlay Deficit Row", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Smith Machine Row", "Single-Arm DB Row"]}, {"id": "438cdedb-0f41-434f-b3eb-f7c6612e1d68", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "8ff969ef-defc-428c-9d7b-2945a6a26b56", "name": "Bayesian Cable Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "af2d09a4-c892-41ad-9532-58d67422c9ac", "name": "Lying Leg Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "2bc9266c-6246-4d36-83fa-74e6666b0622", "name": "Smith Machine Squat", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "9b5cb963-01c7-452f-98af-d94859830012", "name": "Barbell RDL", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB RDL", "Snatch-Grip RDL"]}, {"id": "fad80c12-a364-4901-a48b-36ca1eec11cb", "name": "Leg Extension", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "e337fb24-c983-478a-a6eb-8f20f9d42c7c", "name": "Standing Calf Raise", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}, {"id": "24e937c0-0a75-4f3c-9f5c-c7847958abc9", "name": "Cable Crunch", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Machine Crunch"]}], "Wednesday": [{"id": "cd4fa493-884a-4cc8-ba10-722a1bd09988", "name": "Neutral-Grip Lat Pulldown", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Neutral-Grip Pull-Up", "Dual-Handle Lat Pulldown"]}, {"id": "c104607f-a840-488d-bade-27dfc683524a", "name": "Chest-Supported Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Chest-Supported T-Bar Row", "Incline Chest-Supported DB Row"]}, {"id": "2100b680-3e67-466d-825b-f12a13649193", "name": "Neutral-Grip Seated Cable Row", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Helms Row", "Meadows Row"]}, {"id": "f49b419b-4b15-4778-89fb-6acecae85530", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "02e2c989-0190-42fe-a35f-c47ef12be3de", "name": "Machine Shrug", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Paused Shrug-In", "DB Shrug"]}, {"id": "d7d73541-12f4-4718-a4a8-7eb707f4da05", "name": "EZ-Bar Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["EZ-Bar Curl", "DB Curl"]}, {"id": "9add696d-ee48-4854-a478-9139971b0e46", "name": "Machine Preacher Curl", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["EZ-Bar Preacher Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "456c61e9-9d33-44a1-9bdf-354568da9c7a", "name": "Barbell Bench Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Machine Chest Press", "DB Bench Press"]}, {"id": "fac3e728-b82d-4e9c-985d-033b5f9b95d6", "name": "Machine Shoulder Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Cable Shoulder Press", "Seated DB Shoulder Press"]}, {"id": "299edad0-be4a-489f-a767-7d8f90db83dd", "name": "Bottom-Half DB Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Bottom-Half Seated Cable Flye", "Low-to-High Cable Crossover"]}, {"id": "c2971f68-70b4-4b7c-8414-3c97964299ae", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "851dcc6a-502a-4e8a-9d4b-2ce98c416d55", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "be0d1569-03e6-42bb-b7a5-7fe9a25801f7", "name": "Cable Triceps Kickback", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["DB Triceps Kickback", "Bench Dip"]}, {"id": "8b289f28-0598-4b1c-9a48-b2c2558814d0", "name": "Roman Chair Leg Raise", "sets": "2", "reps": "10-20", "defaultWorking": 2, "alternatives": ["Hanging Leg Raise", "Modified Candlestick"]}], "Friday": [{"id": "b85caf38-971d-431c-b1d7-413458cf8389", "name": "Leg Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Smith Machine Static Lunge", "DB Walking Lunge"]}, {"id": "e9259cdb-29d0-4812-8d67-aacab1f0f455", "name": "Seated Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "7f29c1fc-e54b-4798-866b-e6d0ff125a7b", "name": "DB Bulgarian Split Squat", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["DB Step-Up", "Goblet Squat"]}, {"id": "659747dc-5f48-4a51-9e57-51cf00b521a0", "name": "Leg Extension", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "a3ff2ab3-a70a-4d05-923e-d816c2ea8db7", "name": "Machine Hip Adduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "06dd64f1-033d-4cb3-8630-231536a19d2b", "name": "Machine Hip Abduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "aeea8757-e8ee-4978-9298-604b12fba09f", "name": "Standing Calf Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "4": {"Monday": [{"id": "df9eb7e0-d9e9-4a0f-adea-71a0eb69876c", "name": "45° Incline Barbell Press", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["45° Incline DB Press", "45° Incline Machine Press"]}, {"id": "ee3fe338-8b52-4533-848b-f20058ebd5c9", "name": "Cable Crossover Ladder", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Pec Deck", "Bottom-Half DB Flye"]}, {"id": "d74a9b19-d87c-4f33-864a-f3d629955f0a", "name": "Wide-Grip Pull-Up", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Dual-Handle Lat Pulldown"]}, {"id": "8e4454a7-bbdd-403b-87c3-5d72d44bbf6d", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "831c02d7-5b66-49dc-8db9-c79c247893d5", "name": "Pendlay Deficit Row", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Smith Machine Row", "Single-Arm DB Row"]}, {"id": "064c56ad-4f39-43ad-a5f5-f01d561744dd", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "c1068871-6058-42b4-86d0-dfddb8159450", "name": "Bayesian Cable Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "8dba730f-7645-41a0-9ec1-376557308757", "name": "Lying Leg Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "c9a3ff50-b234-4363-85d1-50d8d6a3ab08", "name": "Smith Machine Squat", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "85e9adb9-5246-42dc-96db-bcc82fb4b178", "name": "Barbell RDL", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB RDL", "Snatch-Grip RDL"]}, {"id": "02fa3b2e-c92f-4724-92e5-bff877db7906", "name": "Leg Extension", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "aea3ad15-9700-4920-864b-b93cf6efdcfd", "name": "Standing Calf Raise", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}, {"id": "b6c39a07-3498-40cf-a066-b627b8773a03", "name": "Cable Crunch", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Machine Crunch"]}], "Wednesday": [{"id": "3b2a8d29-ceb9-4c8a-8be9-7f7e1b7de19c", "name": "Neutral-Grip Lat Pulldown", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Neutral-Grip Pull-Up", "Dual-Handle Lat Pulldown"]}, {"id": "6e4ce687-1beb-4d2e-b6c3-a7fae74e6e3e", "name": "Chest-Supported Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Chest-Supported T-Bar Row", "Incline Chest-Supported DB Row"]}, {"id": "206bc23b-395d-40f3-ae67-bc953c57c439", "name": "Neutral-Grip Seated Cable Row", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Helms Row", "Meadows Row"]}, {"id": "ba4d41b9-783e-49f6-91e5-c478891bad94", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "680449f6-f4cc-4f45-841d-8f622086afab", "name": "Machine Shrug", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Paused Shrug-In", "DB Shrug"]}, {"id": "0fe87703-3e8f-4f34-bbc5-3c9316239c91", "name": "EZ-Bar Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["EZ-Bar Curl", "DB Curl"]}, {"id": "dfef07be-a894-4d32-be8f-1db8ada40ee0", "name": "Machine Preacher Curl", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["EZ-Bar Preacher Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "65e6fd1a-0cf4-41d4-b7bc-6a19d196842d", "name": "Barbell Bench Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Machine Chest Press", "DB Bench Press"]}, {"id": "e39e735d-cbf3-4ff4-9171-d5eb08959328", "name": "Machine Shoulder Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Cable Shoulder Press", "Seated DB Shoulder Press"]}, {"id": "7168d030-6cde-4e62-9984-c8ad99a0e6b5", "name": "Bottom-Half DB Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Bottom-Half Seated Cable Flye", "Low-to-High Cable Crossover"]}, {"id": "7c7df5a2-e8d8-4642-90de-ad72d9ef6b09", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "146c62a1-80e0-479f-bf71-92712d4ec34a", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "dffc5e6c-87eb-415b-88e3-c853af400e93", "name": "Cable Triceps Kickback", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["DB Triceps Kickback", "Bench Dip"]}, {"id": "57284369-6d7f-4f67-ab18-6c25569904eb", "name": "Roman Chair Leg Raise", "sets": "2", "reps": "10-20", "defaultWorking": 2, "alternatives": ["Hanging Leg Raise", "Modified Candlestick"]}], "Friday": [{"id": "da950c31-160f-478e-987c-23b3f8b47696", "name": "Leg Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Smith Machine Static Lunge", "DB Walking Lunge"]}, {"id": "01eef06e-2f19-4896-998c-7096b8115437", "name": "Seated Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "e0793796-09d2-4e10-9ea3-1f57f26a123e", "name": "DB Bulgarian Split Squat", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["DB Step-Up", "Goblet Squat"]}, {"id": "3ea3a14b-2590-4870-b027-0e92b87a1400", "name": "Leg Extension", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "59d781be-fcce-4df3-b544-515666ab13ca", "name": "Machine Hip Adduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "7ff88727-681a-4411-a3dd-f0a24b277e95", "name": "Machine Hip Abduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "d2995eae-5437-4516-a048-074068c0bba3", "name": "Standing Calf Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "5": {"Monday": [{"id": "3e9b3cb0-32ac-44a8-8b76-b037c1daae3c", "name": "45° Incline Barbell Press", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["45° Incline DB Press", "45° Incline Machine Press"]}, {"id": "a7a0cdeb-0546-4dbf-9208-5431f65bd64e", "name": "Cable Crossover Ladder", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Pec Deck", "Bottom-Half DB Flye"]}, {"id": "44947fe4-c642-40e4-a9e2-2cf10adcf88f", "name": "Wide-Grip Pull-Up", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Dual-Handle Lat Pulldown"]}, {"id": "8ac0d7e7-d880-440b-86d4-3a13b1c5494f", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "7bb8418d-b493-498b-84e0-f7c36a94646c", "name": "Pendlay Deficit Row", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Smith Machine Row", "Single-Arm DB Row"]}, {"id": "f5116331-5e65-4e59-bb2e-7636dd2e5f91", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "60efcbeb-376d-4185-a6d1-8ecdbf76fa58", "name": "Bayesian Cable Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "50089912-1205-4e3d-a096-be63478a1434", "name": "Lying Leg Curl", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "616b28f2-ed3d-4722-8e08-6c8eb6c72839", "name": "Smith Machine Squat", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "f1710b2e-5d15-44d8-b275-9a474df00a7a", "name": "Barbell RDL", "sets": "3", "reps": "6-8", "defaultWorking": 3, "alternatives": ["DB RDL", "Snatch-Grip RDL"]}, {"id": "93b78f0a-870c-4353-8c32-dd9d30db8db8", "name": "Leg Extension", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "4e187e3a-e0cc-4109-badf-140943e3babf", "name": "Standing Calf Raise", "sets": "2", "reps": "6-8", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}, {"id": "914263ef-e685-4c07-a1c4-d60a800a16a2", "name": "Cable Crunch", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Machine Crunch"]}], "Wednesday": [{"id": "42785f6c-78de-46df-9085-bcb56a1b7e40", "name": "Neutral-Grip Lat Pulldown", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Neutral-Grip Pull-Up", "Dual-Handle Lat Pulldown"]}, {"id": "bcc29818-3519-4288-97e7-ae4bd3914795", "name": "Chest-Supported Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Chest-Supported T-Bar Row", "Incline Chest-Supported DB Row"]}, {"id": "56b1aa87-891d-4f9f-8ad4-73d422cb06c2", "name": "Neutral-Grip Seated Cable Row", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Helms Row", "Meadows Row"]}, {"id": "6fbccdaa-61b4-4740-910d-dcac180d8398", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "d5ebe4d6-df0b-4dd8-a2b0-cbe77eb958b3", "name": "Machine Shrug", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Paused Shrug-In", "DB Shrug"]}, {"id": "25ce28ec-6510-4162-8d68-e17e29bd771f", "name": "EZ-Bar Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["EZ-Bar Curl", "DB Curl"]}, {"id": "59bfdfa0-ab88-4506-be47-19cae63081fc", "name": "Machine Preacher Curl", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["EZ-Bar Preacher Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "d005ebf8-1584-4919-bba1-69eda461677d", "name": "Barbell Bench Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Machine Chest Press", "DB Bench Press"]}, {"id": "36f94d02-3ce2-42ee-ace8-134e4eb8bb7f", "name": "Machine Shoulder Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Cable Shoulder Press", "Seated DB Shoulder Press"]}, {"id": "465d1dc9-018e-4156-96bc-1ce2265ebb9e", "name": "Bottom-Half DB Flye", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Bottom-Half Seated Cable Flye", "Low-to-High Cable Crossover"]}, {"id": "e0539baf-42dc-42af-b48e-46b74c078fee", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "c6997233-9812-4b27-a6c8-d310ac3b42a7", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "2006f826-5ce1-4c06-8ef9-c5943db2caf5", "name": "Cable Triceps Kickback", "sets": "1", "reps": "12-15", "defaultWorking": 1, "alternatives": ["DB Triceps Kickback", "Bench Dip"]}, {"id": "128f92a5-0853-4bd5-bc31-4e7cbba5cee4", "name": "Roman Chair Leg Raise", "sets": "2", "reps": "10-20", "defaultWorking": 2, "alternatives": ["Hanging Leg Raise", "Modified Candlestick"]}], "Friday": [{"id": "5bcce6e7-7fd1-4f4c-a535-317c80b19f36", "name": "Leg Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Smith Machine Static Lunge", "DB Walking Lunge"]}, {"id": "49283382-225e-43a4-a136-f8c6d4b1654b", "name": "Seated Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "81b0ba3a-8955-4f5c-aa7e-757339907e0d", "name": "DB Bulgarian Split Squat", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["DB Step-Up", "Goblet Squat"]}, {"id": "b69699a0-350b-49ae-9e88-8d94226615c0", "name": "Leg Extension", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "4a0ad501-7dc7-4083-8b53-a6038d33808d", "name": "Machine Hip Adduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "77ab2c9e-1ebe-484c-ad5d-79884e5220d4", "name": "Machine Hip Abduction", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "ca8dc7e3-6d84-486a-b953-362121a483f0", "name": "Standing Calf Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "6": {"Monday": [{"id": "2bb3ea7b-0a43-416a-ba46-64f96ee30270", "name": "45° Incline DB Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "56f7c00e-1113-4c34-b94e-3e73a15ad9ca", "name": "Pec Deck", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "703c663b-edb0-4541-9d3f-5128ccc6ecc3", "name": "Dual-Handle Lat Pulldown", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "e129da0b-d26e-410d-91aa-4cf39cdeac7a", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "09cdf3ef-312a-42de-abfb-c5d494743a04", "name": "Smith Machine Row", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "d746963f-b466-40e6-a1a3-f57d8d758660", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "b3b0e630-ae85-4fa2-86d8-b2c80efed701", "name": "Bayesian Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "8c62c955-3280-4af7-9ad8-dbf82d0fbcbb", "name": "Lying Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "6574f4f1-f0ee-4ce2-8af8-72ef7420c31c", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "d68940d1-8258-44b4-86c6-162e4ce76826", "name": "45° Hyperextension", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "e231ef5f-149b-4be9-a000-0b9a06c6dc9d", "name": "Leg Extension", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "118f89e7-5afc-4949-adad-025492b8a631", "name": "Leg Press Calf Press", "sets": "2", "reps": "8-10", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "864bc5d3-9673-4b47-9dcd-51cec01c582b", "name": "Machine Crunch", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "24ad8dbe-785f-49ff-8b7f-fb38ac438886", "name": "Lean-Back Lat Pulldown", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "b0eb04a9-002c-4ac6-906f-a294f3c690d7", "name": "Chest-Supported T-Bar Row", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "84c2b0ce-d2f9-4081-81fc-6d87417f1cd5", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "a2139d54-f514-420e-b0e1-dc33b88b3c2e", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "be975d81-8f8c-47c0-af05-12602ced3809", "name": "Cable Paused Shrug-In", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "5ee713e9-d197-46fb-8841-fabcca7060cb", "name": "Cable Rope Hammer Curl", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "66672395-8d8e-4d6f-b460-8e12b1849fec", "name": "DB Concentration Curl", "sets": "1", "reps": "15-20", "defaultWorking": 1, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "2c080326-b7d2-4cf5-8a1c-9ca3b723dd04", "name": "Machine Chest Press", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "50115439-dfee-4d97-a99a-45c218f33df4", "name": "Seated DB Shoulder Press", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "f186d647-4786-423f-a7c3-d5c1f10dcfd0", "name": "Bottom-Half Seated Cable Flye", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "c99f35cb-9e40-4348-aade-432a81ff4c54", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "7e1fd8a6-00f8-4fc4-a742-e3fd6b3b3c2d", "name": "EZ-Bar Skull Crusher", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "f3a41d90-8130-4bd8-9860-9e756ab9ba45", "name": "Triceps Pressdown (Bar)", "sets": "1", "reps": "15-20", "defaultWorking": 1, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "186b538e-d88c-446f-a32d-be98ba93b526", "name": "Ab Wheel Rollout", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "5a708f56-7d0f-437e-8c5f-08ef1f2c5477", "name": "Hack Squat", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "9b87ea2f-e431-4b73-8315-db73ac4847a0", "name": "Seated Leg Curl", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "258926d8-766c-4ea3-81bf-b5282400e3fb", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "2f3693a7-1da2-4eb3-a6c7-3ee40526bba3", "name": "Leg Extension", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "9c83d98c-917d-4b18-809c-a8d4b4dda6e0", "name": "Machine Hip Adduction", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "d2a233e6-986c-4a0d-8073-fa4dfec5073a", "name": "Machine Hip Abduction", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "2999d0d2-5112-4ac9-ac38-5e9f9531d127", "name": "Standing Calf Raise", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "7": {"Monday": [{"id": "2d3a0eab-3c61-4327-98f9-cf831851f3f3", "name": "45° Incline DB Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "dadb4f5c-fe73-43e6-a5b4-395d5d3c967b", "name": "Pec Deck", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "dc41e55d-caab-4798-aea6-a9dee6594f0d", "name": "Dual-Handle Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "28bec190-0e13-43ce-9fcd-bd8d6de853b3", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "ce67e7b8-d3cf-4c88-a9ab-0be3405062b0", "name": "Smith Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "c743d0d0-4878-4cee-888e-bd240f005bb5", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "50ab73ae-e549-46e0-b3ae-4fe1386117aa", "name": "Bayesian Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "de891dc9-c7fc-4a5b-93f4-e886da115ef7", "name": "Lying Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "11c75a8d-9bd6-4cb6-9adf-2901f8ab0ff5", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "27e9ef37-9016-4873-ab1e-60c27685a2d8", "name": "45° Hyperextension", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "9f40b87d-2b8b-4343-b33d-354c3877e4eb", "name": "Leg Extension", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "59bd6ae4-4289-455a-90ff-876c1fd71d79", "name": "Leg Press Calf Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "9938aa4d-57ae-4b60-9993-9d0a6bb222c1", "name": "Machine Crunch", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "de836b41-4db5-4906-b007-bb446df1464d", "name": "Lean-Back Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "7de6c00f-afe6-43cf-a89e-c4e79e45d3ff", "name": "Chest-Supported T-Bar Row", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "978f1acf-77c1-4a28-9e7d-9e84f024f027", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "7cc61786-08fd-46aa-8634-d90efcbf79e6", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "725c6d2a-a3b4-4057-9d8f-5477d96405fa", "name": "Cable Paused Shrug-In", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "80687871-848e-41b3-ab32-ba343544afde", "name": "Cable Rope Hammer Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "b8e2fca3-54bb-450a-a771-24c2019a22fe", "name": "DB Concentration Curl", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "66cf4031-fd51-4f8f-b560-9ce2cad92919", "name": "Machine Chest Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "fc1b7752-1b81-4294-be8a-070a5891addc", "name": "Seated DB Shoulder Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "1a12759d-5653-4037-8a99-7c227c216d04", "name": "Bottom-Half Seated Cable Flye", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "f9eeebf4-a521-40d0-a2c3-05768d80a343", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "5987666b-5935-40d2-bdab-b14361fc82d4", "name": "EZ-Bar Skull Crusher", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "9d791162-7b27-405d-b7ec-f9379362c798", "name": "Triceps Pressdown (Bar)", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "2bfc10a7-6603-4050-add7-762c347f8b46", "name": "Ab Wheel Rollout", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "d14ea218-2ba7-4fec-aa49-3924774ef101", "name": "Hack Squat", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "1d4bfc6d-8164-4dd0-9a86-86f6f8eddae2", "name": "Seated Leg Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "04e56f07-6f4b-4d76-ad22-03a2e8dd4603", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "84f0db79-9ed4-4628-9672-b3dc93258240", "name": "Leg Extension", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "dfeb0fbf-2716-4130-93f5-3de1b2156c71", "name": "Machine Hip Adduction", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "bf8dc297-c973-4f33-948c-ac9e0befbbf2", "name": "Machine Hip Abduction", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "cadb3cf6-92ce-4a51-9bec-6badeaac7edb", "name": "Standing Calf Raise", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "8": {"Monday": [{"id": "d622168c-00f5-4d13-96c2-0e4cf635f041", "name": "45° Incline DB Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "9d80e4dd-3676-4267-b053-5318982c3bc9", "name": "Pec Deck", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "aa208188-7bc3-4b7f-a9f3-61138fc09eec", "name": "Dual-Handle Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "c400ae41-52cc-42bb-a034-f0945eb6afa8", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "5898b1c9-05e2-4f11-8667-8c663b35042a", "name": "Smith Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "cf0d031e-9f37-4d1b-b3b4-5d5e17d66b91", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "72693505-b107-4124-8d47-6f7735cd409a", "name": "Bayesian Cable Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "f14341cd-35fa-495a-91c9-1607f635d6da", "name": "Lying Leg Curl", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "f4f4f5a1-f8c0-4823-a7c5-060bd6aa2d54", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "90c3a4bf-e747-4cad-acbe-5707f5411ac8", "name": "45° Hyperextension", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "a313718a-6ae4-443a-8bc3-8309009e2817", "name": "Leg Extension", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "f2ac0267-605a-4ac4-806d-cd655c60a667", "name": "Leg Press Calf Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "dd7f3aff-ea86-47c7-b20b-69517f3b1594", "name": "Machine Crunch", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "367c698b-7fe0-4f9a-9854-ed70e0a79edd", "name": "Lean-Back Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "7d62cefc-570c-4cca-95e3-7c78c08af0ac", "name": "Chest-Supported T-Bar Row", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "57ec5eb5-69af-421b-9a89-6e1b1e0825b9", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "2f8a036d-7727-465d-9bc4-16c3b3f48276", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "af916b7e-3d3d-494e-ad97-8941e91f14a1", "name": "Cable Paused Shrug-In", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "0a713bda-6a72-4ffa-b45a-588102b41b45", "name": "Cable Rope Hammer Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "444047aa-ab93-4f62-852b-9bdf3e94510e", "name": "DB Concentration Curl", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "a45fcd65-ce06-4882-a648-f8d5d33366b4", "name": "Machine Chest Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "75796b9c-27f6-47de-825b-35060a539348", "name": "Seated DB Shoulder Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "f1c204cc-647d-412d-9de4-51537b79d40c", "name": "Bottom-Half Seated Cable Flye", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "15454c3d-44bc-4cf0-bc8b-2d71cc9fe2d0", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "c08ca443-4daa-4314-b580-3d565cfb26a4", "name": "EZ-Bar Skull Crusher", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "433eea59-8e64-42f0-80d2-6a538c6c7a7e", "name": "Triceps Pressdown (Bar)", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "9e8d8dd8-cf58-4772-b0cc-ee3153576b60", "name": "Ab Wheel Rollout", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "6717a4f9-f6a4-4500-a64a-80c378b50dd9", "name": "Hack Squat", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "9c002a91-616e-4236-8e12-efc9f95b3ee3", "name": "Seated Leg Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "7fc12a02-8692-4c89-b0f4-ac6edf56c9c4", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "a17b75ed-ad0e-4ef7-8838-da2f96a5ab8b", "name": "Leg Extension", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "dc06acd1-9fc9-41e9-9dfc-8a68988e18e6", "name": "Machine Hip Adduction", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "6ac3a6aa-b034-49f1-a462-cd58729ae942", "name": "Machine Hip Abduction", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "0b4142f4-7489-43a3-ba2a-8f8f6dd21da9", "name": "Standing Calf Raise", "sets": "2", "reps": "12-15", "defaultWorking": 2, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "9": {"Monday": [{"id": "597c4ef9-05bf-49f2-866e-c79bcc8a9818", "name": "45° Incline DB Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "884139c7-a906-4966-bb59-da5fbd5797d4", "name": "Pec Deck", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "db19933f-880e-44f4-9406-0681b618970e", "name": "Dual-Handle Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "23e111db-8a6c-47d1-a34d-60c84d7562b5", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "dad644b8-428d-4ce3-8023-92090a9a2abc", "name": "Smith Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "dfeb3a04-2c5a-49c6-a287-7b014d6966e6", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "220f53ca-25b8-408e-900f-7403eb9f84d9", "name": "Bayesian Cable Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "38cac660-b307-4ee3-b5d7-0d4d29f4e3ee", "name": "Lying Leg Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "6ba88098-a4b5-4d7b-a901-52e1299f42e1", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "062cf355-77b6-4803-a7da-154e79b89a06", "name": "45° Hyperextension", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "2745749f-cdad-4cb5-b2e9-976a3fb4f5bf", "name": "Leg Extension", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "b5f32dae-203c-44cf-a760-aab69b43f84d", "name": "Leg Press Calf Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "d9d875a8-eeb8-4910-a2ee-e1630274944c", "name": "Machine Crunch", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "f06f6d29-3aac-47f5-9df4-2464a9503cb5", "name": "Lean-Back Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "0a0b73b5-b1f0-4b52-ae77-14aae3e83cb7", "name": "Chest-Supported T-Bar Row", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "0c8ae4ff-5949-4f99-bc90-05535dc76276", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "4be7a38c-b507-4c27-bd11-ed03527c3635", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "eee34694-b2b7-44c6-81ff-cea4978f5007", "name": "Cable Paused Shrug-In", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "79bf176d-1fa2-4d2c-a346-d32402da8af1", "name": "Cable Rope Hammer Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "b63c8b4b-7710-4d6c-88b2-37d210b86b24", "name": "DB Concentration Curl", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "8cc77734-2164-4b5b-8e21-4ca0f58d8782", "name": "Machine Chest Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "7eb1e82a-cb11-43bd-a7b2-988784dbe19f", "name": "Seated DB Shoulder Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "da9c25a2-2ccf-4372-8876-d7511ab92de9", "name": "Bottom-Half Seated Cable Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "555576b0-45b9-45ce-b9ae-f2f18ef06078", "name": "High-Cable Lateral Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "693782b6-7a70-4c8a-b507-6507d77f836b", "name": "EZ-Bar Skull Crusher", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "b315b399-7ef1-4af9-88f6-06636d72ed33", "name": "Triceps Pressdown (Bar)", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "a1f7833b-963d-421a-8c90-5eb7fcf94e90", "name": "Ab Wheel Rollout", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "15030c4f-847e-4273-85d9-6ebb1c5ce6a6", "name": "Hack Squat", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "84eca2ff-df95-4e20-b7ac-07d02c4b9513", "name": "Seated Leg Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "1b6b8684-bb6a-4112-81b5-53508ef4f9fb", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "6c314edf-3608-48b6-9b11-69ee65f34db8", "name": "Leg Extension", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "a861edbf-cbc8-4899-ad94-39d8619adb1e", "name": "Machine Hip Adduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "bf0b26b3-1229-4408-aefc-933fc35313f2", "name": "Machine Hip Abduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "b025a13f-b44a-4e7a-8ff6-7e6b4aea3454", "name": "Standing Calf Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "10": {"Monday": [{"id": "22bdc6ba-7ae2-463d-a943-b19f2b0e8eba", "name": "45° Incline DB Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "4cdbe252-df51-4e5f-bacc-a3f5b5d31f99", "name": "Pec Deck", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "acf098c8-7b4d-4e49-870e-064acae6fea2", "name": "Dual-Handle Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "2554653e-7bab-4ca2-bf69-f757fd6c2b60", "name": "High-Cable Lateral Raise", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "68b2867b-f3e9-4a0d-b27a-c4ff6cfa3cae", "name": "Smith Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "5e820023-7034-4edf-acbe-d468bd333a19", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "b5f2fdbe-ae8e-4610-b38a-a8f6b05f02c5", "name": "Bayesian Cable Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "dabe6b6f-892c-43dd-ac78-ff1e90a86f14", "name": "Lying Leg Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "5224a22f-ffbb-43f1-a736-4ff63e49b4ac", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "0ba3735a-ed43-4e18-9745-c7ec5022c1c6", "name": "45° Hyperextension", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "e0bf45f4-d5a8-49c1-b1f0-5a1ea1960bd5", "name": "Leg Extension", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "cb5c462a-16bf-4d00-9ee5-e4a086aeda17", "name": "Leg Press Calf Press", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "531ab444-4df7-4e6a-9683-bcd5bd98167c", "name": "Machine Crunch", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "93dfab6d-2f64-4e61-b7e0-dd5aa6ed71fc", "name": "Lean-Back Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "7f61e344-ec83-4967-b3b9-e2876e61b9a9", "name": "Chest-Supported T-Bar Row", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "3a8cfe2a-3449-4004-9f72-e581c10f9748", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "26c4dd37-8c64-47cd-aecc-395124a437c5", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "157139e4-769f-4c9c-88f9-abfcf963a7f9", "name": "Cable Paused Shrug-In", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "4c83cb65-9c0d-41b6-b0f6-cec1a13c15a8", "name": "Cable Rope Hammer Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "cff26667-a24c-4fe9-953b-33efb597d538", "name": "DB Concentration Curl", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "4c25633a-8d99-4471-b8cb-ee7d0460bf39", "name": "Machine Chest Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "435e6daa-c6a5-48f0-9f96-d7d297fc205b", "name": "Seated DB Shoulder Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "fcb82273-e0ca-4aad-b4ee-776e6f6c50c7", "name": "Bottom-Half Seated Cable Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "c17e952b-aa35-4e82-874e-2af2c03f1244", "name": "High-Cable Lateral Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "ea4fdaf9-1469-4bf9-bfea-4c6724d05ec2", "name": "EZ-Bar Skull Crusher", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "722bff66-b45c-4550-a11d-09baae6dba39", "name": "Triceps Pressdown (Bar)", "sets": "2", "reps": "15-20", "defaultWorking": 2, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "09330777-2111-44f3-bf04-c68d5df314b4", "name": "Ab Wheel Rollout", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "6d85edd2-279c-4eeb-aef3-5de19990ff38", "name": "Hack Squat", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "c5b26974-a924-4609-8e24-d4376f0d250a", "name": "Seated Leg Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "13331dd2-9c50-4e24-95fd-ac2fa3893e56", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "2aae25d2-5c9f-4ce5-bb16-8967ad9ea9e9", "name": "Leg Extension", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "0b64f3c8-4ee3-4095-89bc-1e97fc8a8c46", "name": "Machine Hip Adduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "aa0422d1-d106-44ca-94e5-26146c952ba3", "name": "Machine Hip Abduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "e6945ad8-c0bf-4fee-be09-ed5e6c4056cc", "name": "Standing Calf Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "11": {"Monday": [{"id": "a6752b07-603e-428b-9593-1d7f14f7d74c", "name": "45° Incline DB Press", "sets": "4", "reps": "8-10", "defaultWorking": 4, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "b5df9313-b8af-49e0-a949-a7b2117df892", "name": "Pec Deck", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "3cdeb70f-74c4-4939-9189-80454b3ccffc", "name": "Dual-Handle Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "25884571-9739-413a-afbd-0afe63233284", "name": "High-Cable Lateral Raise", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "a5a65531-d5cf-4051-94b3-c31f591d4d12", "name": "Smith Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "c74984e2-9ef6-467e-89bb-05f159503043", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "cfdd27cc-b3cb-4582-890c-0e4986edb541", "name": "Bayesian Cable Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "520624a9-eb69-4820-a347-ddbc8f24f717", "name": "Lying Leg Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "125ea31d-5aab-4ce1-acac-78b2e386293a", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "dac06bd3-8a4c-4832-af0e-0777e15fcffb", "name": "45° Hyperextension", "sets": "4", "reps": "8-10", "defaultWorking": 4, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "83f40048-9897-4e84-9f2a-e28d5fcdf04c", "name": "Leg Extension", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "fe4dc768-2cb8-4ba4-8048-c16c55afe1ae", "name": "Leg Press Calf Press", "sets": "4", "reps": "8-10", "defaultWorking": 4, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "7fcfc5cd-a64a-47c2-bec6-3c6db228f4a0", "name": "Machine Crunch", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "2c5e3428-a1a2-4f88-b0d0-22b6fdb8a623", "name": "Lean-Back Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "efc726b5-8d62-421d-89e3-e4d67d23a071", "name": "Chest-Supported T-Bar Row", "sets": "4", "reps": "10-12", "defaultWorking": 4, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "b64c7d35-677b-4a2b-92b9-13f783b37b85", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "3a83fc0d-e26b-45a7-a6c2-16976e2f04a9", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "cae0a84f-3591-48d9-bdd0-b6517dee5b24", "name": "Cable Paused Shrug-In", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "2dcb3a0d-600b-428f-8968-704589309f54", "name": "Cable Rope Hammer Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "42773cb5-ee8a-4641-98e5-f6a33d81018e", "name": "DB Concentration Curl", "sets": "3", "reps": "15-20", "defaultWorking": 3, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "2f7d9d72-3f44-49ca-81fb-7cd5c1e26e93", "name": "Machine Chest Press", "sets": "4", "reps": "10-12", "defaultWorking": 4, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "1860a9dc-baee-4692-b13e-0868189bec51", "name": "Seated DB Shoulder Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "b3e440fb-ff09-40e7-89cd-d58b97e0be81", "name": "Bottom-Half Seated Cable Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "5c31819d-372e-46fa-ba47-c4fb991e5bbe", "name": "High-Cable Lateral Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "307bdb4f-9234-4bae-b9c5-d3e9a94267da", "name": "EZ-Bar Skull Crusher", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "4f4811f6-b0bc-4576-bfc9-619c72e2bb9c", "name": "Triceps Pressdown (Bar)", "sets": "3", "reps": "15-20", "defaultWorking": 3, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "33b6b60b-34b6-4fd7-87d2-e9dc7e9aeee6", "name": "Ab Wheel Rollout", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "a32801e6-aa97-4be1-80c3-d18aadcb65e3", "name": "Hack Squat", "sets": "4", "reps": "10-12", "defaultWorking": 4, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "612ad71c-8f0a-47af-883a-523ccf9f5761", "name": "Seated Leg Curl", "sets": "4", "reps": "12-15", "defaultWorking": 4, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "25c2e2db-98fe-4493-bc4f-c14c3ad0c0e9", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "081176fb-dc97-4e98-aa71-4842e56a69a8", "name": "Leg Extension", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "e32525b8-7240-4761-b0fc-795fec749282", "name": "Machine Hip Adduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "f3cd5206-cd9a-4245-b17f-1eccd32a8b13", "name": "Machine Hip Abduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "9f30e3e4-8a81-457c-bc58-c9e33fd62ade", "name": "Standing Calf Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}, "12": {"Monday": [{"id": "e47e3f26-9583-4843-aae6-f439f89218e3", "name": "45° Incline DB Press", "sets": "4", "reps": "8-10", "defaultWorking": 4, "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"]}, {"id": "dd225c60-b453-4332-a755-cbe2cb2c4eb9", "name": "Pec Deck", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"]}, {"id": "b790e440-79f6-41a1-a315-0bfdda4e5c9c", "name": "Dual-Handle Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"]}, {"id": "d51e0de0-d0ee-4f98-8b98-4f39f0c81323", "name": "High-Cable Lateral Raise", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "3c27d347-92da-4ea8-988d-dadda719c2b3", "name": "Smith Machine Row", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"]}, {"id": "aeaebe59-6c4c-4587-ac9a-527c6fbd10ef", "name": "Overhead Cable Triceps Extension (Bar)", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"]}, {"id": "c6f3ecff-7e91-4b48-b0cd-a9d800681830", "name": "Bayesian Cable Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"]}], "Tuesday": [{"id": "f220ef78-8eb0-4f6a-a667-5d43eff0b82b", "name": "Lying Leg Curl", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"]}, {"id": "ac0d244a-e93d-45fc-8052-15f03795ecac", "name": "Smith Machine Static Lunge w/ Elevated Front Foot", "sets": "3", "reps": "8-10", "defaultWorking": 3, "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"]}, {"id": "86ecd53b-1ce7-427d-8cb8-90f94248f043", "name": "45° Hyperextension", "sets": "4", "reps": "8-10", "defaultWorking": 4, "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"]}, {"id": "11b9f69e-df89-4be5-bf8e-a05770cedf3a", "name": "Leg Extension", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "099f6b2b-6be4-465a-8cde-2399d87ae777", "name": "Leg Press Calf Press", "sets": "4", "reps": "8-10", "defaultWorking": 4, "alternatives": ["Seated Calf Raise", "Standing Calf Raise"]}, {"id": "afa18330-9489-4166-9203-cac9bcb4738c", "name": "Machine Crunch", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Decline Weighted Crunch", "Cable Crunch"]}], "Wednesday": [{"id": "5b64ac47-85cd-4489-b862-17c29de3cd7f", "name": "Lean-Back Lat Pulldown", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"]}, {"id": "2663dca6-85ac-4ba4-a9c9-ddf26af9a237", "name": "Chest-Supported T-Bar Row", "sets": "4", "reps": "10-12", "defaultWorking": 4, "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"]}, {"id": "97d45582-af37-490d-8416-799375744c74", "name": "Dual-Handle Elbows-Out Cable Row", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"]}, {"id": "295527e8-45c1-4238-81ce-c1923b5527f9", "name": "1-Arm 45° Cable Rear Delt Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Rope Face Pull", "Reverse Pec Deck"]}, {"id": "dfa450e7-a092-4693-9c1e-c06918c85bfc", "name": "Cable Paused Shrug-In", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Machine Shrug", "DB Shrug"]}, {"id": "9944bafb-ee33-4fb4-92e3-7ff6359a9410", "name": "Cable Rope Hammer Curl", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"]}, {"id": "2b782e22-a9c8-4f4d-91ee-4d612402d95d", "name": "DB Concentration Curl", "sets": "3", "reps": "15-20", "defaultWorking": 3, "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"]}], "Thursday": [{"id": "40cec38c-7776-4e72-915c-16b228278157", "name": "Machine Chest Press", "sets": "4", "reps": "10-12", "defaultWorking": 4, "alternatives": ["Barbell Bench Press", "DB Bench Press"]}, {"id": "74f6b643-1f38-4848-8556-61ceb6864b96", "name": "Seated DB Shoulder Press", "sets": "3", "reps": "10-12", "defaultWorking": 3, "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"]}, {"id": "650fdc5a-46e9-49ce-b900-e13205fef41c", "name": "Bottom-Half Seated Cable Flye", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"]}, {"id": "e6636831-caf8-4e85-a907-1463c72a6f89", "name": "High-Cable Lateral Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"]}, {"id": "48fbceae-61c3-48b7-acba-2cbaa50f257d", "name": "EZ-Bar Skull Crusher", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"]}, {"id": "4ded3deb-c0a7-4763-b43f-4130c45eee23", "name": "Triceps Pressdown (Bar)", "sets": "3", "reps": "15-20", "defaultWorking": 3, "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"]}, {"id": "81a144bb-cd38-446a-99a2-af0740318a11", "name": "Ab Wheel Rollout", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"]}], "Friday": [{"id": "e8294303-1c41-4726-960e-c4f643d66812", "name": "Hack Squat", "sets": "4", "reps": "10-12", "defaultWorking": 4, "alternatives": ["Leg Press", "DB Walking Lunge"]}, {"id": "b4664dca-b353-4d37-8e2d-66af18952bee", "name": "Seated Leg Curl", "sets": "4", "reps": "12-15", "defaultWorking": 4, "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"]}, {"id": "6ed40e82-c8ee-48aa-9241-315f178a6aad", "name": "Walking Lunge", "sets": "2", "reps": "10-12", "defaultWorking": 2, "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"]}, {"id": "d25c6681-b433-4616-bd16-a6abfae5b4b7", "name": "Leg Extension", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Reverse Nordic", "Sissy Squat"]}, {"id": "db555bf4-618e-414c-97ac-eed81bd72085", "name": "Machine Hip Adduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"]}, {"id": "3efbba3d-0c3a-401f-84e7-b1e117645eac", "name": "Machine Hip Abduction", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"]}, {"id": "cb2b3a40-423f-4506-9409-c01d18283be4", "name": "Standing Calf Raise", "sets": "3", "reps": "12-15", "defaultWorking": 3, "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"]}]}};
+    const DEFAULT_EXERCISE_LIST = ["1-Arm 45° Cable Rear Delt Flye", "45° Hyperextension", "45° Incline Barbell Press", "45° Incline DB Press", "Ab Wheel Rollout", "Barbell Bench Press", "Barbell RDL", "Bayesian Cable Curl", "Bottom-Half DB Flye", "Bottom-Half Seated Cable Flye", "Cable Crossover Ladder", "Cable Crunch", "Cable Paused Shrug-In", "Cable Rope Hammer Curl", "Cable Triceps Kickback", "Chest-Supported Machine Row", "Chest-Supported T-Bar Row", "DB Bulgarian Split Squat", "DB Concentration Curl", "Dual-Handle Elbows-Out Cable Row", "Dual-Handle Lat Pulldown", "EZ-Bar Cable Curl", "EZ-Bar Skull Crusher", "Hack Squat", "High-Cable Lateral Raise", "Lean-Back Lat Pulldown", "Leg Extension", "Leg Press", "Leg Press Calf Press", "Lying Leg Curl", "Machine Chest Press", "Machine Crunch", "Machine Hip Abduction", "Machine Hip Adduction", "Machine Preacher Curl", "Machine Shoulder Press", "Machine Shrug", "Neutral-Grip Lat Pulldown", "Neutral-Grip Seated Cable Row", "Overhead Cable Triceps Extension (Bar)", "Pec Deck", "Pendlay Deficit Row", "Roman Chair Leg Raise", "Seated DB Shoulder Press", "Seated Leg Curl", "Smith Machine Row", "Smith Machine Squat", "Smith Machine Static Lunge w/ Elevated Front Foot", "Standing Calf Raise", "Triceps Pressdown (Bar)", "Walking Lunge", "Wide-Grip Pull-Up"];
+    const DEFAULT_EXERCISE_MAP = {"45° Incline Barbell Press": {"sets": "2", "reps": "6-8", "alternatives": ["45° Incline DB Press", "45° Incline Machine Press"], "defaultWorking": 2}, "Cable Crossover Ladder": {"sets": "2", "reps": "8-10", "alternatives": ["Pec Deck", "Bottom-Half DB Flye"], "defaultWorking": 2}, "Wide-Grip Pull-Up": {"sets": "2", "reps": "8-10", "alternatives": ["Wide-Grip Lat Pulldown", "Dual-Handle Lat Pulldown"], "defaultWorking": 2}, "High-Cable Lateral Raise": {"sets": "2", "reps": "8-10", "alternatives": ["High-Cable Cuffed Lateral Raise", "Lean-In DB Lateral Raise"], "defaultWorking": 2}, "Pendlay Deficit Row": {"sets": "2", "reps": "6-8", "alternatives": ["Smith Machine Row", "Single-Arm DB Row"], "defaultWorking": 2}, "Overhead Cable Triceps Extension (Bar)": {"sets": "2", "reps": "8-10", "alternatives": ["Overhead Cable Triceps Extension (Rope)", "DB Skull Crusher"], "defaultWorking": 2}, "Bayesian Cable Curl": {"sets": "2", "reps": "8-10", "alternatives": ["Seated Super-Bayesian High Cable Curl", "Incline DB Stretch Curl"], "defaultWorking": 2}, "Lying Leg Curl": {"sets": "2", "reps": "8-10", "alternatives": ["Seated Leg Curl", "Nordic Ham Curl"], "defaultWorking": 2}, "Smith Machine Squat": {"sets": "2", "reps": "6-8", "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"], "defaultWorking": 2}, "Barbell RDL": {"sets": "2", "reps": "6-8", "alternatives": ["DB RDL", "Snatch-Grip RDL"], "defaultWorking": 2}, "Leg Extension": {"sets": "2", "reps": "8-10", "alternatives": ["Reverse Nordic", "Sissy Squat"], "defaultWorking": 2}, "Standing Calf Raise": {"sets": "2", "reps": "6-8", "alternatives": ["Seated Calf Raise", "Leg Press Calf Press"], "defaultWorking": 2}, "Cable Crunch": {"sets": "2", "reps": "8-10", "alternatives": ["Decline Weighted Crunch", "Machine Crunch"], "defaultWorking": 2}, "Neutral-Grip Lat Pulldown": {"sets": "2", "reps": "8-10", "alternatives": ["Neutral-Grip Pull-Up", "Dual-Handle Lat Pulldown"], "defaultWorking": 2}, "Chest-Supported Machine Row": {"sets": "2", "reps": "8-10", "alternatives": ["Chest-Supported T-Bar Row", "Incline Chest-Supported DB Row"], "defaultWorking": 2}, "Neutral-Grip Seated Cable Row": {"sets": "2", "reps": "10-12", "alternatives": ["Helms Row", "Meadows Row"], "defaultWorking": 2}, "1-Arm 45° Cable Rear Delt Flye": {"sets": "2", "reps": "10-12", "alternatives": ["Rope Face Pull", "Reverse Pec Deck"], "defaultWorking": 2}, "Machine Shrug": {"sets": "2", "reps": "10-12", "alternatives": ["Cable Paused Shrug-In", "DB Shrug"], "defaultWorking": 2}, "EZ-Bar Cable Curl": {"sets": "2", "reps": "10-12", "alternatives": ["EZ-Bar Curl", "DB Curl"], "defaultWorking": 2}, "Machine Preacher Curl": {"sets": "1", "reps": "12-15", "alternatives": ["EZ-Bar Preacher Curl", "DB Preacher Curl"], "defaultWorking": 1}, "Barbell Bench Press": {"sets": "2", "reps": "8-10", "alternatives": ["Machine Chest Press", "DB Bench Press"], "defaultWorking": 2}, "Machine Shoulder Press": {"sets": "2", "reps": "8-10", "alternatives": ["Cable Shoulder Press", "Seated DB Shoulder Press"], "defaultWorking": 2}, "Bottom-Half DB Flye": {"sets": "2", "reps": "10-12", "alternatives": ["Bottom-Half Seated Cable Flye", "Low-to-High Cable Crossover"], "defaultWorking": 2}, "Cable Triceps Kickback": {"sets": "1", "reps": "12-15", "alternatives": ["DB Triceps Kickback", "Bench Dip"], "defaultWorking": 1}, "Roman Chair Leg Raise": {"sets": "2", "reps": "10-20", "alternatives": ["Hanging Leg Raise", "Modified Candlestick"], "defaultWorking": 2}, "Leg Press": {"sets": "2", "reps": "8-10", "alternatives": ["Smith Machine Static Lunge", "DB Walking Lunge"], "defaultWorking": 2}, "Seated Leg Curl": {"sets": "2", "reps": "10-12", "alternatives": ["Lying Leg Curl", "Nordic Ham Curl"], "defaultWorking": 2}, "DB Bulgarian Split Squat": {"sets": "2", "reps": "8-10", "alternatives": ["DB Step-Up", "Goblet Squat"], "defaultWorking": 2}, "Machine Hip Adduction": {"sets": "2", "reps": "10-12", "alternatives": ["Cable Hip Adduction", "Copenhagen Hip Adduction"], "defaultWorking": 2}, "Machine Hip Abduction": {"sets": "2", "reps": "10-12", "alternatives": ["Cable Hip Abduction", "Lateral Band Walk"], "defaultWorking": 2}, "45° Incline DB Press": {"sets": "2", "reps": "8-10", "alternatives": ["45° Incline Barbell Press", "45° Incline Machine Press"], "defaultWorking": 2}, "Pec Deck": {"sets": "2", "reps": "10-12", "alternatives": ["Cable Crossover Ladder", "Bottom-Half DB Flye"], "defaultWorking": 2}, "Dual-Handle Lat Pulldown": {"sets": "2", "reps": "10-12", "alternatives": ["Wide-Grip Lat Pulldown", "Wide-Grip Pull-Up"], "defaultWorking": 2}, "Smith Machine Row": {"sets": "2", "reps": "8-10", "alternatives": ["Pendlay Deficit Row", "Single-Arm DB Row"], "defaultWorking": 2}, "Smith Machine Static Lunge w/ Elevated Front Foot": {"sets": "2", "reps": "8-10", "alternatives": ["DB Bulgarian Split Squat", "High-Bar Back Squat"], "defaultWorking": 2}, "45° Hyperextension": {"sets": "2", "reps": "8-10", "alternatives": ["Glute-Ham Raise", "Cable Pull-Through"], "defaultWorking": 2}, "Leg Press Calf Press": {"sets": "2", "reps": "8-10", "alternatives": ["Seated Calf Raise", "Standing Calf Raise"], "defaultWorking": 2}, "Machine Crunch": {"sets": "2", "reps": "10-12", "alternatives": ["Decline Weighted Crunch", "Cable Crunch"], "defaultWorking": 2}, "Lean-Back Lat Pulldown": {"sets": "2", "reps": "10-12", "alternatives": ["Lean-Back Machine Pulldown", "Pull-Up"], "defaultWorking": 2}, "Chest-Supported T-Bar Row": {"sets": "2", "reps": "10-12", "alternatives": ["Chest-Supported Machine Row", "Incline Chest-Supported DB Row"], "defaultWorking": 2}, "Dual-Handle Elbows-Out Cable Row": {"sets": "2", "reps": "12-15", "alternatives": ["Arm-Out Single-Arm DB Row", "Meadows Row"], "defaultWorking": 2}, "Cable Paused Shrug-In": {"sets": "2", "reps": "12-15", "alternatives": ["Machine Shrug", "DB Shrug"], "defaultWorking": 2}, "Cable Rope Hammer Curl": {"sets": "2", "reps": "12-15", "alternatives": ["DB Hammer Curl", "Hammer Preacher Curl"], "defaultWorking": 2}, "DB Concentration Curl": {"sets": "1", "reps": "15-20", "alternatives": ["Concentration Cable Curl", "DB Preacher Curl"], "defaultWorking": 1}, "Machine Chest Press": {"sets": "2", "reps": "10-12", "alternatives": ["Barbell Bench Press", "DB Bench Press"], "defaultWorking": 2}, "Seated DB Shoulder Press": {"sets": "2", "reps": "10-12", "alternatives": ["Cable Shoulder Press", "Machine Shoulder Press"], "defaultWorking": 2}, "Bottom-Half Seated Cable Flye": {"sets": "2", "reps": "12-15", "alternatives": ["Bottom-Half DB Flye", "Low-to-High Cable Crossover"], "defaultWorking": 2}, "EZ-Bar Skull Crusher": {"sets": "2", "reps": "12-15", "alternatives": ["DB Skull Crusher", "Katana Triceps Extension"], "defaultWorking": 2}, "Triceps Pressdown (Bar)": {"sets": "1", "reps": "15-20", "alternatives": ["Triceps Pressdown (Rope)", "DB Triceps Kickback"], "defaultWorking": 1}, "Ab Wheel Rollout": {"sets": "2", "reps": "12-15", "alternatives": ["Swiss Ball Rollout", "Long-Lever Plank"], "defaultWorking": 2}, "Hack Squat": {"sets": "2", "reps": "10-12", "alternatives": ["Leg Press", "DB Walking Lunge"], "defaultWorking": 2}, "Walking Lunge": {"sets": "2", "reps": "10-12", "alternatives": ["Smith Machine Static Lunge", "DB Static Lunge"], "defaultWorking": 2}};
+
+    // ---------- Icons (inline SVG) ----------
+    const Icon = ({ children, className = "" }) => (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+           strokeLinecap="round" strokeLinejoin="round" className={className}>
+        {children}
+      </svg>
+    );
+    const ChevronDown = (p) => <Icon className={p.className}><polyline points="6 9 12 15 18 9" /></Icon>;
+    const ChevronUp   = (p) => <Icon className={p.className}><polyline points="18 15 12 9 6 15" /></Icon>;
+    const Trash2      = (p) => <Icon className={p.className}>
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </Icon>;
+    const Plus = (p) => <Icon className={p.className}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></Icon>;
+
+    const Home = (p) => <Icon className={p.className}>
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+      <polyline points="9 22 9 12 15 12 15 22"></polyline>
+    </Icon>;
+    const ListOrdered = (p) => <Icon className={p.className}>
+      <line x1="10" y1="6" x2="21" y2="6"></line>
+      <line x1="10" y1="12" x2="21" y2="12"></line>
+      <line x1="10" y1="18" x2="21" y2="18"></line>
+      <path d="M4 6h1v4"></path>
+      <path d="M4 10h2"></path>
+      <path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path>
+    </Icon>;
+    const Calendar = (p) => <Icon className={p.className}>
+      <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+      <line x1="16" y1="2" x2="16" y2="6"></line>
+      <line x1="8" y1="2" x2="8" y2="6"></line>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </Icon>;
+    const Database = (p) => <Icon className={p.className}>
+      <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+    </Icon>;
+
+    // ---------- Constants ----------
+    const STORAGE_KEY = "gymTracker_prefilled_from_excel_v1";
+    const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const WORKOUT_TYPES = {
+      Monday: "Upper Strength (Focus)",
+      Tuesday: "Lower Strength (Focus)",
+      Wednesday: "Pull (Hypertrophy Focus)",
+      Thursday: "Push (Hypertrophy Focus)",
+      Friday: "Legs (Hypertrophy Focus)",
+    };
+
+    const uuid = () => (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    const makeRow = (label) => ({ id: uuid(), label, weight: "", reps: "" });
+    const makeEmptyExerciseLog = (defaultWorking = 2) => ({
+      selectedAlt: "",
+      customAlt: "",
+      warmup: [makeRow("W1"), makeRow("W2"), makeRow("W3")],
+      working: Array.from({ length: defaultWorking }, (_, i) => makeRow(String(i + 1))),
+      notes: "",
+      savedAt: null,
+    });
+
+    // logs[week][day][exerciseId] = exerciseLog
+    const ensureLogPath = (logs, week, day, exId, defaultWorking) => {
+      const next = structuredClone(logs || {});
+      if (!next[week]) next[week] = {};
+      if (!next[week][day]) next[week][day] = {};
+      if (!next[week][day][exId]) next[week][day][exId] = makeEmptyExerciseLog(defaultWorking);
+      return next;
+    };
+
+    // ---------- Excel export/import ----------
+    const exportToExcel = async ({ program, logs }) => {
+      // If XLSX can't load (adblock / no internet), we fall back to CSV exports.
+      const cleanProgram = JSON.parse(JSON.stringify(program || {}));
+      const cleanLogs = JSON.parse(JSON.stringify(logs || {}));
+
+      const rowsProgram = [];
+      for (let w = 1; w <= 12; w++) {
+        for (const d of DAYS) {
+          for (const ex of (cleanProgram?.[w]?.[d] || [])) {
+            rowsProgram.push({
+              Week: w,
+              Day: d,
+              Exercise: ex.name,
+              Sets: ex.sets || "",
+              Reps: ex.reps || "",
+              Alternatives: (ex.alternatives || []).join("|"),
+            });
+          }
+        }
+      }
+
+      const rowsLogs = [];
+      for (const wStr of Object.keys(cleanLogs || {})) {
+        const w = Number(wStr);
+        for (const d of Object.keys(cleanLogs[w] || {})) {
+          for (const exId of Object.keys(cleanLogs[w][d] || {})) {
+            const entry = cleanLogs[w][d][exId];
+            const note = entry.notes || "";
+            for (const r of (entry.warmup || [])) {
+              rowsLogs.push({
+                Week: w, Day: d, ExerciseId: exId,
+                SetType: "warmup", Set: r.label, Weight: r.weight, Reps: r.reps, Notes: note
+              });
+            }
+            for (const r of (entry.working || [])) {
+              rowsLogs.push({
+                Week: w, Day: d, ExerciseId: exId,
+                SetType: "working", Set: r.label, Weight: r.weight, Reps: r.reps, Notes: note
+              });
+            }
+          }
+        }
+      }
+
+      try {
+        const XLSX = await ensureXLSX();
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsProgram), "Program");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsLogs), "Logs");
+        XLSX.writeFile(wb, "gym-tracker-export.xlsx");
+      } catch (e) {
+        console.warn("XLSX export failed, using CSV fallback:", e);
+        downloadTextFile("gym-tracker-program.csv", toCSV(rowsProgram), "text/csv");
+        downloadTextFile("gym-tracker-logs.csv", toCSV(rowsLogs), "text/csv");
+        alert("Couldn't load the Excel library (maybe adblock). Exported CSV files instead.");
+      }
+    };
+
+    const importFromExcel = (file, onLoaded, onError) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const wb = XLSX.read(data, { type: "array" });
+
+          const program = structuredClone(PREFILLED_PROGRAM);
+          const logs = {};
+
+          const wsProgram = wb.Sheets["Program"];
+          if (wsProgram) {
+            const fresh = {};
+            for (let w = 1; w <= 12; w++) {
+              fresh[w] = {};
+              for (const d of DAYS) fresh[w][d] = [];
+            }
+
+            const rows = XLSX.utils.sheet_to_json(wsProgram, { defval: "" });
+            for (const r of rows) {
+              const w = Number(r.Week);
+              const d = String(r.Day || "");
+              if (!w || w < 1 || w > 12 || !DAYS.includes(d)) continue;
+              const ex = {
+                id: String(r.ExerciseId || uuid()),
+                name: String(r.ExerciseName || "").trim(),
+                sets: String(r.Sets || ""),
+                reps: String(r.Reps || ""),
+                defaultWorking: Number(r.DefaultWorking || 2),
+                alternatives: String(r.Alternatives || "").split("|").map(s => s.trim()).filter(Boolean),
+              };
+              if (!ex.name) continue;
+              fresh[w][d].push(ex);
+            }
+
+            for (let w = 1; w <= 12; w++) program[w] = fresh[w];
+          }
+
+          const wsLogs = wb.Sheets["Logs"];
+          if (wsLogs) {
+            const rows = XLSX.utils.sheet_to_json(wsLogs, { defval: "" });
+            for (const r of rows) {
+              const w = Number(r.Week);
+              const d = String(r.Day || "");
+              const exId = String(r.ExerciseId || "");
+              if (!w || w < 1 || w > 12 || !DAYS.includes(d) || !exId) continue;
+
+              if (!logs[w]) logs[w] = {};
+              if (!logs[w][d]) logs[w][d] = {};
+              if (!logs[w][d][exId]) logs[w][d][exId] = makeEmptyExerciseLog(2);
+
+              const entry = logs[w][d][exId];
+              entry.selectedAlt = String(r.Alt || "");
+              entry.notes = String(r.Notes || "");
+
+              const type = String(r.SetType || "").toLowerCase();
+              const label = String(r.SetLabel || "");
+              if (!type || !label) continue;
+
+              const rowObj = { id: uuid(), label, weight: String(r.Weight || ""), reps: String(r.Reps || "") };
+              if (type === "warmup") entry.warmup.push(rowObj);
+              if (type === "working") entry.working.push(rowObj);
+            }
+
+            for (const wStr of Object.keys(logs)) {
+              const w = Number(wStr);
+              for (const d of Object.keys(logs[w] || {})) {
+                for (const exId of Object.keys(logs[w][d] || {})) {
+                  const entry = logs[w][d][exId];
+                  entry.warmup = (entry.warmup || []).filter(r => (r.weight || r.reps || r.label));
+                  entry.working = (entry.working || []).filter(r => (r.weight || r.reps || r.label));
+                  if (entry.warmup.length === 0) entry.warmup = [makeRow("W1"), makeRow("W2"), makeRow("W3")];
+                  if (entry.working.length === 0) entry.working = [makeRow("1"), makeRow("2")];
+                  entry.working = entry.working.map((r, i) => ({ ...r, label: String(i + 1) }));
+                }
+              }
+            }
+          }
+
+          onLoaded({ program, logs });
+        } catch (err) {
+          onError(err);
+        }
+      };
+      reader.onerror = () => onError(new Error("Failed reading file."));
+      reader.readAsArrayBuffer(file);
+    };
+
+    
+    
+    // Build a stable "template snapshot" from the original program (the Excel/XML import),
+    // keyed by exercise id. This is used to keep template values consistent even if you
+    // reorder, edit, or otherwise modify the exercise later.
+    const TEMPLATE_BY_ID = (() => {
+      const map = {};
+      try {
+        for (const wk of Object.keys(PREFILLED_PROGRAM || {})) {
+          const weekObj = PREFILLED_PROGRAM[wk] || {};
+          for (const dy of Object.keys(weekObj || {})) {
+            const arr = weekObj[dy] || [];
+            for (const ex of arr) {
+              if (!ex || !ex.id) continue;
+              // First occurrence wins (keeps it stable if duplicates exist)
+              if (map[ex.id]) continue;
+              map[ex.id] = {
+                name: ex.name ?? '',
+                alternatives: (() => {
+                  const raw = (ex.templateAlternatives !== undefined ? ex.templateAlternatives : ex.alternatives);
+                  const alts = Array.isArray(raw) ? raw.slice() : (typeof raw === 'string' ? raw.split(/[,;/]/) : []);
+                  const main = (ex.name ?? '').trim();
+                  return alts
+                    .map(a => (typeof a === 'string' ? a.trim() : String(a ?? '').trim()))
+                    .filter(a => a.length)
+                    // Guard: template alternates should never include the main exercise name
+                    .filter(a => !main || a !== main);
+                })(),
+                sets: ex.sets ?? '',
+                reps: ex.reps ?? '',
+              };
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Template map build failed:", e);
+      }
+      return map;
+    })();
+
+    // Ensure we never "forget" the original (Excel/template) exercise + alternates,
+    // and ensure each exercise has a stable 'order' field for reordering.
+    const ensureExerciseMeta = (prog) => {
+      const next = structuredClone(prog || {});
+      for (const wk of Object.keys(next)) {
+        const weekObj = next[wk] || {};
+        for (const dy of Object.keys(weekObj)) {
+          const arr = weekObj[dy] || [];
+          arr.forEach((ex, idx) => {
+            if (ex.templateName === undefined) ex.templateName = (TEMPLATE_BY_ID[ex.id]?.name ?? ex.name ?? '-');
+            if (ex.templateAlternatives === undefined) ex.templateAlternatives = (Array.isArray(TEMPLATE_BY_ID[ex.id]?.alternatives) ? TEMPLATE_BY_ID[ex.id].alternatives.slice() : (Array.isArray(ex.alternatives) ? ex.alternatives.slice() : []));
+            if (ex.templateSets === undefined) ex.templateSets = (TEMPLATE_BY_ID[ex.id]?.sets ?? ex.sets ?? '-');
+            if (ex.templateReps === undefined) ex.templateReps = (TEMPLATE_BY_ID[ex.id]?.reps ?? ex.reps ?? '-');
+            if (ex.order === undefined || ex.order === null) ex.order = idx;
+          });
+        }
+      }
+      return next;
+    };
+
+const App = () => {
+      const [view, setView] = useState("current"); // current | weeks | day | data
+      const [week, setWeek] = useState(1);
+      const [day, setDay] = useState("Monday");
+      const [expandedExId, setExpandedExId] = useState(null);
+      const [dirtyByExId, setDirtyByExId] = useState({});
+      const [altDraftById, setAltDraftById] = useState({});
+      const [orderDraftByKey, setOrderDraftByKey] = useState({});
+      const [reorderPickId, setReorderPickId] = useState(null);
+
+            const [recentlyMovedId, setRecentlyMovedId] = useState(null);
+// Prevent accidental double-taps in Android WebView
+      const lastTapRef = useRef(0);
+      const safeTap = (e, fn) => {
+        try { e?.stopPropagation?.(); } catch {}
+        const now = Date.now();
+        if (now - lastTapRef.current < 180) return;
+        lastTapRef.current = now;
+        fn();
+      };
+
+      const [program, setProgram] = useState(() => ensureExerciseMeta(PREFILLED_PROGRAM));
+      const [logs, setLogs] = useState({});
+
+      // --- Draft vs saved state: only persist when user clicks Save ---
+      const savedJsonRef = useRef
+      const markDirty = useCallback((exId) => {
+        setDirtyByExId(prev => (prev[exId] ? prev : { ...prev, [exId]: true }));
+      }, []);
+
+      const clearDirty = useCallback((exId) => {
+        setDirtyByExId(prev => {
+          if (!prev[exId]) return prev;
+          const next = { ...prev };
+          delete next[exId];
+          return next;
+        });
+      }, []);
+
+      const clearAllDirty = useCallback(() => setDirtyByExId({}), []);
+
+      const isDirty = useCallback((exId) => !!dirtyByExId[exId], [dirtyByExId]);
+
+      const getSavedState = useCallback(() => {
+        const json = savedJsonRef.current ?? localStorage.getItem(STORAGE_KEY);
+        if (!json) return null;
+        try { return JSON.parse(json); } catch { return null; }
+      }, []);
+(null);
+      const currentJson = useMemo(
+        () => JSON.stringify({ program, logs, week, day }),
+        [program, logs, week, day]
+      );
+
+      const saveNow = useCallback(() => {
+        try {
+          localStorage.setItem(STORAGE_KEY, currentJson);
+          savedJsonRef.current = currentJson;
+        } catch (e) {
+          console.warn("Save failed:", e);
+          alert("Save failed. Your browser may be blocking localStorage.");
+        }
+      }, [currentJson]);
+
+      const discardNow = useCallback(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed?.program) setProgram(parsed.program); else setProgram(PREFILLED_PROGRAM);
+            if (parsed?.logs) setLogs(parsed.logs); else setLogs({});
+            if (parsed?.week) setWeek(parsed.week ?? 1); else setWeek(1);
+            if (parsed?.day) setDay(parsed.day ?? "Monday"); else setDay("Monday");
+            // Reset baseline for dirty tracking
+            const baseline = {
+              program: parsed?.program ?? PREFILLED_PROGRAM,
+              logs: parsed?.logs ?? {},
+              week: parsed?.week ?? 1,
+              day: parsed?.day ?? "Monday",
+            };
+            savedJsonRef.current = JSON.stringify(baseline);
+          } else {
+            // Nothing saved yet -> revert to defaults
+            setProgram(PREFILLED_PROGRAM);
+            setLogs({});
+            setWeek(1);
+            setDay("Monday");
+            savedJsonRef.current = JSON.stringify({
+              program: PREFILLED_PROGRAM,
+              logs: {},
+              week: 1,
+              day: "Monday",
+            });
+          }
+          setExpandedExId(null);
+        } catch (e) {
+          console.warn("Discard failed:", e);
+          alert("Discard failed. Your browser may be blocking localStorage.");
+        }
+      }, []);
+
+      const [dirty, setDirty] = useState(false);
+      useEffect(() => {
+        // Initialize baseline once, after the first render
+        if (savedJsonRef.current === null) savedJsonRef.current = currentJson;
+        setDirty(currentJson !== savedJsonRef.current);
+      }, [currentJson]);
+
+
+// Exercise catalog (dropdown) is editable + saved locally
+      const CATALOG_KEY = "gymTracker_exerciseCatalog_v1";
+      const [exerciseList, setExerciseList] = useState(DEFAULT_EXERCISE_LIST);
+      const [exerciseMap, setExerciseMap] = useState(DEFAULT_EXERCISE_MAP);
+
+      // Add Exercise modal state (supports custom exercise)
+      const [customExerciseName, setCustomExerciseName] = useState("");
+      const [customSets, setCustomSets] = useState("");
+      const [customReps, setCustomReps] = useState("");
+const [showAdd, setShowAdd] = useState(false);
+      const [addName, setAddName] = useState(exerciseList[0] || "");
+      const fileInputRef = useRef(null);
+
+      useEffect(() => {
+        const dayMap = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+        const today = dayMap[new Date().getDay()];
+        if (DAYS.includes(today)) setDay(today);
+
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (parsed?.program) setProgram(parsed.program);
+            if (parsed?.logs) setLogs(parsed.logs);
+            if (parsed?.week) setWeek(parsed.week);
+            if (parsed?.day) setDay(parsed.day);
+            // Baseline for dirty tracking: treat what we loaded as "saved"
+            const baseline = {
+              program: parsed?.program ?? PREFILLED_PROGRAM,
+              logs: parsed?.logs ?? {},
+              week: parsed?.week ?? 1,
+              day: parsed?.day ?? (DAYS.includes(today) ? today : "Monday"),
+            };
+            savedJsonRef.current = JSON.stringify(baseline);
+          } catch {}
+        }
+
+        if (!savedJsonRef.current) {
+          savedJsonRef.current = JSON.stringify({
+            program: PREFILLED_PROGRAM,
+            logs: {},
+            week: 1,
+            day: DAYS.includes(today) ? today : "Monday",
+          });
+        }
+
+        // Load editable exercise catalog
+        const savedCatalog = localStorage.getItem(CATALOG_KEY);
+        if (savedCatalog) {
+          try {
+            const parsed = JSON.parse(savedCatalog);
+            if (Array.isArray(parsed?.list) && parsed.list.length) setExerciseList(parsed.list);
+            if (parsed?.map && typeof parsed.map === "object") setExerciseMap(parsed.map);
+          } catch {}
+        }
+      }, []);
+      // Persist program/logs/week/day implicitly (debounced) to reduce lag
+useEffect(() => {
+        localStorage.setItem(CATALOG_KEY, JSON.stringify({ list: exerciseList, map: exerciseMap }));
+      }, [exerciseList, exerciseMap]);
+
+      const dayKey = week + ":" + day;
+      const baseExercises = (program?.[week]?.[day] || []).slice().sort((a,b)=>(((a.order ?? 0) - (b.order ?? 0)) || String(a.id).localeCompare(String(b.id))));
+      const draftIds = orderDraftByKey[dayKey];
+      const exercises = (() => {
+        if (!Array.isArray(draftIds) || !draftIds.length) return baseExercises;
+        const byId = new Map(baseExercises.map(e => [e.id, e]));
+        const ordered = draftIds.map(id => byId.get(id)).filter(Boolean);
+        // If something new was added after the draft was created, append it at the end
+        const seen = new Set(draftIds);
+        baseExercises.forEach(e => { if (!seen.has(e.id)) ordered.push(e); });
+        return ordered;
+      })();
+
+      const ensureOrderDraft = () => {
+        setOrderDraftByKey(prev => {
+          if (Array.isArray(prev[dayKey]) && prev[dayKey].length) return prev;
+          return { ...prev, [dayKey]: baseExercises.map(e => e.id) };
+        });
+      };
+
+      const clearOrderDraft = () => {
+        setOrderDraftByKey(prev => {
+          if (!prev[dayKey]) return prev;
+          const next = { ...prev };
+          delete next[dayKey];
+          return next;
+        });
+        setReorderPickId(null);
+      };
+
+      const moveInOrderDraft = (pickId, targetId) => {
+        ensureOrderDraft();
+        setOrderDraftByKey(prev => {
+          const cur = Array.isArray(prev[dayKey]) && prev[dayKey].length ? prev[dayKey].slice() : baseExercises.map(e => e.id);
+          const from = cur.indexOf(pickId);
+          const to = cur.indexOf(targetId);
+          if (from < 0 || to < 0 || pickId === targetId) return prev;
+          cur.splice(from, 1);
+          const insertAt = (from < to) ? (to - 1) : to;
+          cur.splice(insertAt, 0, pickId);
+          return { ...prev, [dayKey]: cur };
+        });
+      };
+
+      const hasOrderDraft = Array.isArray(draftIds) && draftIds.length;
+      const isOrderChanged = hasOrderDraft && (draftIds.join('|') !== baseExercises.map(e=>e.id).join('|'));
+
+      const saveOrderDraft = () => {
+        if (!Array.isArray(orderDraftByKey[dayKey]) || !orderDraftByKey[dayKey].length) return;
+
+        // 1) Commit orders into in-memory program
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          const arr = next?.[week]?.[day] || [];
+          const orderIds2 = orderDraftByKey[dayKey];
+          const pos = new Map(orderIds2.map((id, i) => [id, i]));
+          next[week][day] = arr.map(ex => ({ ...ex, order: (pos.has(ex.id) ? pos.get(ex.id) : (ex.order ?? 0)) }));
+          return next;
+        });
+
+        // 2) Persist orders to localStorage (without needing per-exercise Save)
+        const saved = getSavedState() || { program: PREFILLED_PROGRAM, logs: {}, week, day };
+        saved.program = saved.program || PREFILLED_PROGRAM;
+        saved.logs = saved.logs || {};
+        if (!saved.program[week]) saved.program[week] = {};
+        if (!saved.program[week][day]) saved.program[week][day] = [];
+        const orderIds2 = orderDraftByKey[dayKey];
+        const pos = new Map(orderIds2.map((id, i) => [id, i]));
+        saved.program[week][day] = (saved.program[week][day] || []).map(ex => ({ ...ex, order: (pos.has(ex.id) ? pos.get(ex.id) : (ex.order ?? 0)) }));
+        saved.week = week;
+        saved.day = day;
+
+        try {
+          const json = JSON.stringify(saved);
+          localStorage.setItem(STORAGE_KEY, json);
+          savedJsonRef.current = json;
+          clearOrderDraft();
+        } catch (e) {
+          console.warn("Save order failed:", e);
+          alert("Save order failed. Your browser may be blocking localStorage.");
+        }
+      };
+
+
+
+      const updateExerciseLog = (ex, updater) => {
+        markDirty(ex.id);
+        setLogs(prev => {
+          const next = ensureLogPath(prev, week, day, ex.id, ex.defaultWorking ?? 2);
+          next[week][day][ex.id] = updater(next[week][day][ex.id]);
+          return next;
+        });
+      };
+
+      const getExerciseLog = (ex) => {
+        const entry = logs?.[week]?.[day]?.[ex.id];
+        return entry || makeEmptyExerciseLog(ex.defaultWorking ?? 2);
+      };
+
+      // If the program "Target Sets" is a plain integer (e.g. "2"), keep it in sync
+      // with the number of working sets the user currently has.
+      const syncTargetSetsIfSimple = (ex, workingCount) => {
+        const cur = (ex?.sets ?? "").trim();
+        if (!/^[0-9]+$/.test(cur)) return; // don't touch ranges like "2-3"
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          const arr = next?.[week]?.[day] || [];
+          const i = arr.findIndex(x => x.id === ex.id);
+          if (i >= 0) arr[i] = { ...arr[i], sets: String(workingCount) };
+          return next;
+        });
+      };
+
+
+      const addWarmupRow = (ex) => {
+        updateExerciseLog(ex, cur => {
+          const next = [...(cur.warmup || [])];
+          const nextLabel = "W" + (next.length + 1);
+          next.push(makeRow(nextLabel));
+          return { ...cur, warmup: next };
+        });
+      };
+
+      const addWorkingRow = (ex) => {
+        const before = getExerciseLog(ex);
+        const beforeCount = (before.working || []).length;
+
+        updateExerciseLog(ex, cur => {
+          const next = [...(cur.working || [])];
+          next.push(makeRow(String(next.length + 1)));
+          return { ...cur, working: next };
+        });
+
+        // Keep Target Sets aligned (only when it's a simple integer)
+        syncTargetSetsIfSimple(ex, beforeCount + 1);
+      };
+
+      const deleteRow = (ex, bucket, rowId) => {
+        const before = getExerciseLog(ex);
+        const beforeWorkingCount = (before.working || []).length;
+
+        updateExerciseLog(ex, cur => {
+          const list = cur[bucket] || [];
+          const filtered = list.filter(r => r.id !== rowId);
+          if (bucket === "working") {
+            const relabeled = filtered.map((r, i) => ({ ...r, label: String(i + 1) }));
+            return { ...cur, working: relabeled };
+          }
+          return { ...cur, [bucket]: filtered };
+        });
+
+        if (bucket === "working") {
+          // If we actually removed a row, new count is before-1 (floor at 0)
+          const nextCount = Math.max(0, beforeWorkingCount - 1);
+          syncTargetSetsIfSimple(ex, nextCount);
+        }
+      };
+
+      const setRowField = (ex, bucket, rowId, field, value) => {
+        updateExerciseLog(ex, cur => {
+          const next = (cur[bucket] || []).map(r => r.id === rowId ? { ...r, [field]: value } : r);
+          return { ...cur, [bucket]: next };
+        });
+      };
+
+      const saveExercise = (ex) => {
+        const saved = getSavedState() || { program: PREFILLED_PROGRAM, logs: {}, week, day };
+        // Ensure paths exist
+        saved.program = saved.program || PREFILLED_PROGRAM;
+        saved.logs = saved.logs || {};
+        if (!saved.program[week]) saved.program[week] = {};
+        if (!saved.program[week][day]) saved.program[week][day] = [];
+        if (!saved.logs[week]) saved.logs[week] = {};
+        if (!saved.logs[week][day]) saved.logs[week][day] = {};
+
+        const curEx = (program?.[week]?.[day] || []).find(e => e.id === ex.id) || ex;
+        const curLog = logs?.[week]?.[day]?.[ex.id] || getExerciseLog(ex);
+
+        // Replace exercise in saved program for this day
+        const arr = saved.program[week][day] || [];
+        const idx = arr.findIndex(e => e.id === ex.id);
+        if (idx >= 0) arr[idx] = curEx;
+        else arr.push(curEx);
+        saved.program[week][day] = arr;
+
+        // Save log entry
+        saved.logs[week][day][ex.id] = { ...curLog, savedAt: new Date().toISOString() };
+
+        // Keep UI selectors
+        saved.week = week;
+        saved.day = day;
+
+        try {
+          const json = JSON.stringify(saved);
+          localStorage.setItem(STORAGE_KEY, json);
+          savedJsonRef.current = json;
+          clearDirty(ex.id);
+          // Also update local in-memory log savedAt so UI reflects immediately
+          setLogs(prev => {
+            const next = ensureLogPath(prev, week, day, ex.id, ex.defaultWorking ?? 2);
+            next[week][day][ex.id] = saved.logs[week][day][ex.id];
+            return next;
+          });
+        } catch (e) {
+          console.warn("Save failed:", e);
+          alert("Save failed. Your browser may be blocking localStorage.");
+        }
+      };
+
+      const discardExercise = (ex) => {
+        const saved = getSavedState();
+        if (!saved) return;
+        const savedEx = saved?.program?.[week]?.[day]?.find?.(e => e.id === ex.id);
+        const savedLog = saved?.logs?.[week]?.[day]?.[ex.id];
+
+        if (savedEx) {
+          setProgram(prev => {
+            const next = structuredClone(prev);
+            if (!next[week]) next[week] = {};
+            if (!next[week][day]) next[week][day] = [];
+            const arr2 = next[week][day];
+            const idx2 = arr2.findIndex(e => e.id === ex.id);
+            if (idx2 >= 0) arr2[idx2] = savedEx;
+            else arr2.push(savedEx);
+            next[week][day] = arr2;
+            return next;
+          });
+        }
+        setLogs(prev => {
+          const next = ensureLogPath(prev, week, day, ex.id, ex.defaultWorking ?? 2);
+          next[week][day][ex.id] = savedLog || makeEmptyExerciseLog(ex.defaultWorking ?? 2);
+          return next;
+        });
+        clearDirty(ex.id);
+      };
+
+      const discardAllDrafts = () => {
+        const saved = getSavedState();
+        if (!saved) return;
+        setProgram(ensureExerciseMeta(saved.program || PREFILLED_PROGRAM));
+        setLogs(saved.logs || {});
+        clearAllDirty();
+        clearOrderDraft();
+      };
+
+      const removeExercise = (exId) => {
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          next[week][day] = (next[week][day] || []).filter(e => e.id !== exId);
+          return next;
+        });
+        setLogs(prev => {
+          const next = structuredClone(prev);
+          if (next?.[week]?.[day]?.[exId]) delete next[week][day][exId];
+          return next;
+        });
+        if (expandedExId === exId) setExpandedExId(null);
+        setOrderDraftByKey(prev => {
+          const key = week + ":" + day;
+          const cur = prev[key];
+          if (!Array.isArray(cur)) return prev;
+          const nextIds = cur.filter(id => id !== exId);
+          return { ...prev, [key]: nextIds };
+        });
+      };
+
+      const moveExerciseOrder = (exId, dir) => {
+        // dir: -1 up, +1 down
+        const sorted = (program?.[week]?.[day] || []).slice().sort((a,b)=>((a.order ?? 0) - (b.order ?? 0)));
+        const idx = sorted.findIndex(e => e.id === exId);
+        const j = idx + dir;
+        if (idx < 0 || j < 0 || j >= sorted.length) return;
+        const otherId = sorted[j].id;
+
+        markDirty(exId);
+        markDirty(otherId);
+
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          const arr = next?.[week]?.[day] || [];
+          const aIdx = arr.findIndex(e => e.id === exId);
+          const bIdx = arr.findIndex(e => e.id === otherId);
+          if (aIdx < 0 || bIdx < 0) return next;
+          const a = arr[aIdx], b = arr[bIdx];
+          const ao = a.order ?? 0, bo = b.order ?? 0;
+          arr[aIdx] = { ...a, order: bo };
+          arr[bIdx] = { ...b, order: ao };
+          return next;
+        });
+      };
+
+
+      const addExerciseToDay = () => {
+        const base = exerciseMap[addName] || {};
+        const currentArr = program?.[week]?.[day] || [];
+        const maxOrder = currentArr.reduce((m,e)=>Math.max(m, (e.order ?? 0)), -1);
+        const ex = {
+          id: uuid(),
+          order: maxOrder + 1,
+          name: addName,
+          sets: base.sets || "",
+          reps: base.reps || "",
+          defaultWorking: base.defaultWorking ?? 2,
+          alternatives: base.alternatives || [],
+        };
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          next[week][day].push(ex);
+          return next;
+        });
+        setShowAdd(false);
+      };
+
+      const finishWorkout = () => {
+        setExpandedExId(null);
+        alert("Workout marked complete (data saved locally).");
+      };
+
+      const onClickImport = () => fileInputRef.current?.click();
+      const onFilePicked = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        importFromExcel(
+          file,
+          ({ program: p, logs: l }) => {
+            setProgram(p);
+            setLogs(l);
+            alert("Imported from Excel!");
+            e.target.value = "";
+          },
+          (err) => {
+            console.error(err);
+            alert("Import failed. Use an Excel exported from this app (Program/Logs sheets).");
+            e.target.value = "";
+          }
+        );
+      };
+
+      return (
+        <div className="min-h-screen pb-24">
+          {/* Header */}
+          <div className="bg-blue-600 text-white shadow">
+            <div className="max-w-6xl mx-auto px-3 sm:px-5 py-3 sm:py-4 flex flex-col sm:flex-row items-start sm:items-start justify-between gap-3">
+              <div>
+                <div className="text-2xl font-bold">Week {week}</div>
+                <div className="text-sm opacity-90">{WORKOUT_TYPES[day] || ""}</div>
+              </div>
+              
+<div className="w-full sm:w-auto flex items-center gap-3">
+  <select
+    className="w-full sm:w-auto bg-blue-700 px-4 py-2 sm:py-1 rounded-full text-sm text-white focus:outline-none"
+    value={day}
+    onChange={(e) => { discardAllDrafts(); setDay(e.target.value); setExpandedExId(null); }}
+  >
+    {DAYS.map((d) => (
+      <option key={d} value={d}>{d}</option>
+    ))}
+  </select>
+</div>
+            </div>
+          </div>
+
+          <div className="max-w-6xl mx-auto px-3 sm:px-5 py-4 sm:py-5">
+            {view === "current" && (
+              <>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                  <div className="text-lg font-semibold text-gray-800">Workout</div>
+                  <button className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                          onClick={() => setShowAdd(v => !v)}>
+                    + Add Exercise
+                  </button>
+                </div>
+
+                {showAdd && (
+                  <div className="bg-white border rounded-lg shadow p-4 mb-4">
+                    <div className="font-semibold mb-2">Add Exercise</div>
+                    <div className="flex gap-3 flex-wrap items-end">
+                      <div className="flex-1 min-w-[260px]">
+                        <div className="text-xs text-gray-500 mb-1">Exercise</div>
+                        <select className="w-full border rounded-md px-3 py-2 bg-white"
+                                value={addName}
+                                onChange={(e) => setAddName(e.target.value)}>
+                          {exerciseList.map(name => (<option key={name} value={name}>{name}</option>))}
+                        </select>
+                      </div>
+                      <div className="flex-1 min-w-[260px]">
+                        <div className="text-xs text-gray-500 mb-1">Or add a new exercise (not in dropdown)</div>
+                        <input
+                          className="w-full border rounded-md px-3 py-2 bg-white"
+                          placeholder="Type new exercise name..."
+                          value={customExerciseName}
+                          onChange={(e) => setCustomExerciseName(e.target.value)}
+                        />
+                        <div className="flex gap-2 mt-2">
+                          <input
+                            className="flex-1 border rounded-md px-3 py-2 bg-white"
+                            placeholder="Sets (optional, e.g. 2-3)"
+                            value={customSets}
+                            onChange={(e) => setCustomSets(e.target.value)}
+                          />
+                          <input
+                            className="flex-1 border rounded-md px-3 py-2 bg-white"
+                            placeholder="Reps (optional, e.g. 6-8)"
+                            value={customReps}
+                            onChange={(e) => setCustomReps(e.target.value)}
+                          />
+                        </div>
+                        <button
+                          className="mt-2 px-4 py-2 rounded-lg bg-gray-900 text-white hover:bg-black disabled:opacity-40"
+                          disabled={!customExerciseName.trim()}
+                          onClick={() => {
+                            const name = customExerciseName.trim();
+                            // add to catalog if not present
+                            setExerciseList(prev => prev.includes(name) ? prev : [...prev, name].sort((a,b) => a.localeCompare(b)));
+                            setExerciseMap(prev => prev[name] ? prev : { ...prev, [name]: { sets: customSets.trim(), reps: customReps.trim(), defaultWorking: 2, alternatives: [] }});
+                            setAddName(name);
+                            setCustomExerciseName("");
+                            setCustomSets("");
+                            setCustomReps("");
+                            alert("Added to dropdown!");
+                          }}
+                        >
+                          Add to Dropdown
+                        </button>
+                      </div>
+
+                      <button className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
+                              onClick={addExerciseToDay}>
+                        Add
+                      </button>
+                      <button className="px-4 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300"
+                              onClick={() => setShowAdd(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      (Sets/reps auto-fill from the Excel catalog when available.)
+                    </div>
+                  </div>
+                )}
+
+                {(isOrderChanged || reorderPickId) && (
+                  <div className="mb-4 p-3 rounded-lg border bg-blue-50 flex items-center justify-between gap-3">
+                    <div className="text-sm text-blue-900">
+                      Order changed (not saved)
+                      {reorderPickId && (
+                        <span className="ml-2 font-semibold">• Moving: {(baseExercises.find(e => e.id === reorderPickId)?.name || "Exercise")}</span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="px-3 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700"
+                              onClick={saveOrderDraft}>
+                        Save order
+                      </button>
+                      <button className="px-3 py-2 rounded-lg bg-white border text-blue-900 font-semibold hover:bg-blue-100"
+                              onClick={clearOrderDraft}>
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-4">
+                  {exercises.map((ex) => {
+                    const open = expandedExId === ex.id;
+                    const state = getExerciseLog(ex);
+
+                                        const isRecentlyMoved = recentlyMovedId === ex.id;
+return (
+                      <div key={ex.id} className={["bg-white rounded-lg shadow border transition-colors duration-500", isRecentlyMoved ? "bg-green-100 border-green-400" : ""].join(" ")}>
+                        <div className="flex items-stretch">
+                          <button className="flex-1 px-5 py-4 flex items-center justify-between text-left"
+                                  onClick={() => setExpandedExId(open ? null : ex.id)}>
+                            <div>
+                              <div className="font-semibold flex items-center gap-2">{ex.name}{isRecentlyMoved && (<span className="text-xs px-2 py-1 rounded-full bg-green-600 text-white">Moved</span>)}</div>
+                              <div className="text-sm text-gray-500">{ex.sets || "—"} sets × {ex.reps || "—"} reps</div>
+                            </div>
+                            {open ? <ChevronUp className="w-6 h-6 text-gray-400" /> : <ChevronDown className="w-6 h-6 text-gray-400" />}
+                          </button>
+
+                          {!reorderPickId && (
+                            <button className="px-3 text-gray-600 hover:bg-gray-50 border-l"
+                                    onClick={(e) => safeTap(e, () => { ensureOrderDraft(); setReorderPickId(ex.id); })}
+                                    title="Move">
+                              ↕
+                            </button>
+                          )}
+                          {reorderPickId === ex.id && (
+                            <button className="px-3 text-gray-600 hover:bg-gray-50 border-l"
+                                    onClick={(e) => safeTap(e, () => setReorderPickId(null))}
+                                    title="Cancel move">
+                              ✕
+                            </button>
+                          )}
+                          {reorderPickId && reorderPickId !== ex.id && (
+                            <button className="px-4 text-blue-600 hover:bg-blue-50 border-l font-semibold"
+                                    onClick={(e) => safeTap(e, () => { moveInOrderDraft(reorderPickId, ex.id); setRecentlyMovedId(reorderPickId); setTimeout(() => setRecentlyMovedId(null), 700); setReorderPickId(null); })}
+                                    title="Drop here">
+                              Drop
+                            </button>
+                          )}
+
+                          <button className="px-4 text-red-600 hover:bg-red-50 border-l"
+                                  onClick={(e) => safeTap(e, () => removeExercise(ex.id))}
+                                  title="Remove exercise">
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
+
+                        {open && (
+                          <div className="px-5 pb-5">
+                            {/* MAIN dropdown + alternate */}
+                            <div className="border rounded-lg p-4 bg-blue-50 border-blue-200">
+                              <div className="text-xs tracking-wide text-gray-700 mb-2">MAIN</div>
+                              <div className="text-[11px] text-gray-600 mb-2 flex flex-wrap gap-x-3 gap-y-1">
+                                <div><span className="font-medium">Template:</span> {ex.templateName || ex.name}</div>
+                                <div><span className="font-medium">Sets:</span> {ex.templateSets ?? ""}</div>
+                                <div><span className="font-medium">Reps:</span> {ex.templateReps ?? ""}</div>
+                              </div>
+                              <select
+                                className="w-full border rounded-md px-3 py-2 bg-white"
+                                value={exerciseList.includes(ex.name) ? ex.name : "__custom__"}
+                                onChange={(e) => {
+                                  const selected = e.target.value;
+                                  markDirty(ex.id);
+                                  if (selected === "__custom__") {
+                                    // Switch to custom entry; keep current name if it was already custom,
+                                    // otherwise clear so the user can type.
+                                    if (exerciseList.includes(ex.name)) {
+                                      const newName = "";
+                                      setProgram(prev => {
+                                        const next = structuredClone(prev);
+                                        const arr = next[week][day] || [];
+                                        const i = arr.findIndex(x => x.id === ex.id);
+                                        if (i >= 0) arr[i] = { ...arr[i], name: newName };
+                                        return next;
+                                      });
+                                    }
+                                    return;
+                                  }
+
+                                  const newName = selected;
+                                  const base = exerciseMap[newName] || {};
+                                  setProgram(prev => {
+                                    const next = structuredClone(prev);
+                                    const arr = next[week][day] || [];
+                                    const i = arr.findIndex(x => x.id === ex.id);
+                                    if (i >= 0) {
+                                      arr[i] = {
+                                        ...arr[i],
+                                        name: newName,
+                                        sets: (base.sets !== undefined && base.sets !== "") ? base.sets : arr[i].sets,
+                                        reps: (base.reps !== undefined && base.reps !== "") ? base.reps : arr[i].reps,
+                                        defaultWorking: (base.defaultWorking ?? arr[i].defaultWorking),
+                                        alternatives: (Array.isArray(base.alternatives) && base.alternatives.length) ? base.alternatives : arr[i].alternatives,
+                                      };
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {exerciseList.map(name => (<option key={name} value={name}>{name}</option>))}
+                                <option value="__custom__">Custom…</option>
+                              </select>
+                              {!exerciseList.includes(ex.name) && (
+                                <input
+                                  className="w-full border rounded-md px-3 py-2 bg-white mt-2"
+                                  value={ex.name}
+                                  placeholder="Type a custom exercise…"
+                                  onChange={(e) => {
+                                    markDirty(ex.id);
+                                    const newName = e.target.value;
+                                    setProgram(prev => {
+                                      const next = structuredClone(prev);
+                                      const arr = next[week][day] || [];
+                                      const i = arr.findIndex(x => x.id === ex.id);
+                                      if (i >= 0) arr[i] = { ...arr[i], name: newName };
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              )}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                <div>
+                                  <div className="text-xs text-gray-600 mb-1">Target Sets</div>
+                                  <input
+                                    className="w-full border rounded-md px-3 py-2 bg-white"
+                                    value={ex.sets || ""}
+                                    placeholder="e.g. 2-3"
+                                    onChange={(e) => {
+                                      markDirty(ex.id);
+                                      const val = e.target.value;
+                                      setProgram(prev => {
+                                        const next = structuredClone(prev);
+                                        const arr = next[week][day] || [];
+                                        const i = arr.findIndex(x => x.id === ex.id);
+                                        if (i >= 0) arr[i] = { ...arr[i], sets: val };
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </div>
+                                <div>
+                                  <div className="text-xs text-gray-600 mb-1">Target Reps</div>
+                                  <input
+                                    className="w-full border rounded-md px-3 py-2 bg-white"
+                                    value={ex.reps || ""}
+                                    placeholder="e.g. 6-8"
+                                    onChange={(e) => {
+                                      markDirty(ex.id);
+                                      const val = e.target.value;
+                                      setProgram(prev => {
+                                        const next = structuredClone(prev);
+                                        const arr = next[week][day] || [];
+                                        const i = arr.findIndex(x => x.id === ex.id);
+                                        if (i >= 0) arr[i] = { ...arr[i], reps: val };
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </div>
+                              </div>
+
+
+                              <div className="text-xs tracking-wide text-gray-700 mt-4 mb-2">ALTERNATE</div>
+                              <div className="text-[11px] text-gray-600 mb-2">
+                                <span className="font-medium">Template alternates:</span>{" "}
+                                {(ex.templateAlternatives || []).length ? (ex.templateAlternatives || []).join(", ") : "—"}
+                              </div>
+                              <select
+                                className="w-full border rounded-md px-3 py-2 bg-white"
+                                value={state.selectedAlt === "__CUSTOM__" ? "__CUSTOM__" : (state.selectedAlt || "__MAIN__")}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === "__MAIN__") {
+                                    updateExerciseLog(ex, cur => ({ ...cur, selectedAlt: "", customAlt: "" }));
+                                  } else if (v === "__CUSTOM__") {
+                                    updateExerciseLog(ex, cur => ({ ...cur, selectedAlt: "__CUSTOM__", customAlt: cur.customAlt || "" }));
+                                  } else {
+                                    updateExerciseLog(ex, cur => ({ ...cur, selectedAlt: v, customAlt: "" }));
+                                  }
+                                }}
+                              >
+                                <option value="__MAIN__">Use Main ({ex.name || "—"})</option>
+                                {(ex.alternatives || []).map((alt) => (<option key={alt} value={alt}>{alt}</option>))}
+                                <option value="__CUSTOM__">Custom…</option>
+                              </select>
+
+                              {state.selectedAlt === "__CUSTOM__" && (
+                                <input
+                                  className="w-full border rounded-md px-3 py-2 bg-white mt-2"
+                                  placeholder="Type a custom alternate exercise"
+                                  value={state.customAlt || ""}
+                                  onChange={(e) => updateExerciseLog(ex, cur => ({ ...cur, customAlt: e.target.value }))}
+                                />
+                              )}
+
+                              <div className="mt-2 flex gap-2">
+                                <input
+                                  className="flex-1 border rounded-md px-3 py-2 bg-white"
+                                  placeholder="Add alternate option (saved with exercise)"
+                                  value={altDraftById[ex.id] || ""}
+                                  onChange={(e) => setAltDraftById(prev => ({ ...prev, [ex.id]: e.target.value }))}
+                                />
+                                <button
+                                  className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                                  disabled={!((altDraftById[ex.id] || '').trim())}
+                                  onClick={() => {
+                                    const v = (altDraftById[ex.id] || '').trim();
+                                    if (!v) return;
+                                    markDirty(ex.id);
+                                    setProgram(prev => {
+                                      const next = structuredClone(prev);
+                                      const arr = next[week][day] || [];
+                                      const i = arr.findIndex(x => x.id === ex.id);
+                                      if (i >= 0) {
+                                        const cur = arr[i];
+                                        const alts = Array.isArray(cur.alternatives) ? cur.alternatives.slice() : [];
+                                        if (!alts.includes(v)) alts.push(v);
+                                        arr[i] = { ...cur, alternatives: alts };
+                                      }
+                                      return next;
+                                    });
+                                    setAltDraftById(prev => ({ ...prev, [ex.id]: "" }));
+                                  }}
+                                >
+                                  Add
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Warm-up */}
+                            <div className="mt-5">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="text-sm font-semibold text-gray-700">WARM-UP SETS</div>
+                                <button className="p-2 rounded-md bg-green-50 text-green-600 hover:bg-green-100"
+                                        onClick={() => addWarmupRow(ex)}
+                                        title="Add warm-up set">
+                                  <Plus className="w-5 h-5" />
+                                </button>
+                              </div>
+
+                              <div className="space-y-2">
+                                {(state.warmup || []).map((row) => (
+                                  <div key={row.id} className="flex flex-col sm:flex-row sm:items-center gap-3">
+                                    <div className="w-10 text-center text-xs font-semibold bg-orange-100 text-orange-700 rounded-md py-2">
+                                      {row.label}
+                                    </div>
+                                    <input className="flex-1 border rounded-md px-3 py-2" placeholder="Weight"
+                                           value={row.weight}
+                                           onChange={(e) => setRowField(ex, "warmup", row.id, "weight", e.target.value)} />
+                                    <input className="flex-1 border rounded-md px-3 py-2" placeholder="Reps"
+                                           value={row.reps}
+                                           onChange={(e) => setRowField(ex, "warmup", row.id, "reps", e.target.value)} />
+                                    <button className="p-2 rounded-md bg-red-50 text-red-600 hover:bg-red-100"
+                                            onClick={() => deleteRow(ex, "warmup", row.id)}
+                                            title="Delete warm-up set">
+                                      <Trash2 className="w-5 h-5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Working */}
+                            <div className="mt-6">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="text-sm font-semibold text-gray-700">WORKING SETS</div>
+                                <button className="p-2 rounded-md bg-green-50 text-green-600 hover:bg-green-100"
+                                        onClick={() => addWorkingRow(ex)}
+                                        title="Add working set">
+                                  <Plus className="w-5 h-5" />
+                                </button>
+                              </div>
+
+                              <div className="space-y-2">
+                                {(state.working || []).map((row) => (
+                                  <div key={row.id} className="flex flex-col sm:flex-row sm:items-center gap-3">
+                                    <div className="w-10 text-center text-xs font-semibold bg-blue-100 text-blue-700 rounded-md py-2">
+                                      {row.label}
+                                    </div>
+                                    <input className="flex-1 border rounded-md px-3 py-2" placeholder="Weight"
+                                           value={row.weight}
+                                           onChange={(e) => setRowField(ex, "working", row.id, "weight", e.target.value)} />
+                                    <input className="flex-1 border rounded-md px-3 py-2" placeholder="Reps"
+                                           value={row.reps}
+                                           onChange={(e) => setRowField(ex, "working", row.id, "reps", e.target.value)} />
+                                    <button className="p-2 rounded-md bg-red-50 text-red-600 hover:bg-red-100"
+                                            onClick={() => deleteRow(ex, "working", row.id)}
+                                            title="Delete working set">
+                                      <Trash2 className="w-5 h-5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Notes + Save */}
+                            <div className="mt-6">
+                              <div className="text-sm font-semibold text-gray-700 mb-2">NOTES</div>
+                              <textarea className="w-full border rounded-md px-3 py-2 min-h-[90px]"
+                                        placeholder="Add notes about this exercise..."
+                                        value={state.notes || ""}
+                                        onChange={(e) => updateExerciseLog(ex, cur => ({ ...cur, notes: e.target.value }))} />
+                            </div>
+
+                            <div className="mt-5 flex gap-3">
+                              <button className={"flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg " + (isDirty(ex.id) ? "" : "opacity-60 cursor-not-allowed")}
+                                      onClick={() => saveExercise(ex)}
+                                      disabled={!isDirty(ex.id)}>
+                                Save
+                              </button>
+                              <button className={"flex-1 bg-gray-200 hover:bg-gray-300 text-gray-900 font-semibold py-3 rounded-lg " + (isDirty(ex.id) ? "" : "opacity-60 cursor-not-allowed")}
+                                      onClick={() => discardExercise(ex)}
+                                      disabled={!isDirty(ex.id)}>
+                                Discard
+                              </button>
+                            </div>
+
+                            {state.savedAt && (
+                              <div className="mt-2 text-xs text-gray-500">
+                                Saved: {new Date(state.savedAt).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg"
+                        onClick={finishWorkout}>
+                  Finish Workout
+                </button>
+              </>
+            )}
+
+            {view === "weeks" && (
+              <div>
+                <div className="text-xl font-bold mb-4">Select Week</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((w) => (
+                    <button key={w}
+                            className={"rounded-lg border shadow-sm px-5 py-4 font-semibold " + (w === week ? "bg-blue-600 text-white" : "bg-white")}
+                            onClick={() => { discardAllDrafts(); setWeek(w); setView("current"); setExpandedExId(null); }}>
+                      Week {w}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {view === "day" && (
+              <div>
+                <div className="text-xl font-bold mb-4">Select Day</div>
+                <div className="space-y-3">
+                  {DAYS.map((d) => (
+                    <button key={d}
+                            className={"w-full text-left rounded-lg border shadow-sm px-5 py-4 " + (d === day ? "bg-blue-600 text-white" : "bg-white")}
+                            onClick={() => { discardAllDrafts(); setDay(d); setView("current"); setExpandedExId(null); }}>
+                      <div className="font-semibold">{d}</div>
+                      <div className={"text-sm " + (d === day ? "text-white/90" : "text-gray-500")}>
+                        {WORKOUT_TYPES[d]}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {view === "data" && (
+              <div>
+                <div className="text-2xl font-bold mb-5">Data Management</div>
+
+                <div className="bg-white rounded-lg border shadow p-5">
+                  <div className="font-semibold mb-3">Export Data</div>
+                  <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg"
+                          onClick={() => exportToExcel({ program, logs })}>
+                    Export (Excel if possible, otherwise CSV)
+                  </button>
+                </div>
+
+                <div className="mt-6 bg-white rounded-lg border shadow p-5">
+                  <div className="font-semibold mb-3">Import Data</div>
+                  <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg"
+                          onClick={onClickImport}>
+                    Import Excel File
+                  </button>
+                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={onFilePicked} />
+                </div>
+
+                <div className="mt-6 bg-white rounded-lg border shadow p-5">
+                  <div className="font-semibold mb-2">Reset</div>
+                  <button className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-lg"
+                          onClick={() => {
+                            if (!confirm("Reset logs (keep program)?")) return;
+                            setProgram(PREFILLED_PROGRAM);
+                            setLogs({});
+                            setWeek(1);
+                            setDay("Monday");
+                            setExpandedExId(null);
+                          }}>
+                    Reset Logs (keep program)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom nav */}
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t">
+            <div className="max-w-6xl mx-auto px-6 py-3 flex justify-around">
+              <button className="flex flex-col items-center text-xs" onClick={() => setView("current")}>
+                <Home className={"w-6 h-6 " + (view === "current" ? "text-blue-600" : "text-gray-400")} />
+                <div className={view === "current" ? "text-blue-600" : "text-gray-500"}>Current</div>
+              </button>
+
+              <button className="flex flex-col items-center text-xs" onClick={() => setView("weeks")}>
+                <ListOrdered className={"w-6 h-6 " + (view === "weeks" ? "text-blue-600" : "text-gray-400")} />
+                <div className={view === "weeks" ? "text-blue-600" : "text-gray-500"}>Weeks</div>
+              </button>
+
+              <button className="flex flex-col items-center text-xs" onClick={() => setView("day")}>
+                <Calendar className={"w-6 h-6 " + (view === "day" ? "text-blue-600" : "text-gray-400")} />
+                <div className={view === "day" ? "text-blue-600" : "text-gray-500"}>Day</div>
+              </button>
+
+              <button className="flex flex-col items-center text-xs" onClick={() => setView("data")}>
+                <Database className={"w-6 h-6 " + (view === "data" ? "text-blue-600" : "text-gray-400")} />
+                <div className={view === "data" ? "text-blue-600" : "text-gray-500"}>Data</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
